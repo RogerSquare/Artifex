@@ -1,0 +1,29 @@
+# Secrets
+.env
+.env.local
+backend/.jwt-secret
+
+# Database
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+
+# Uploads / user content
+backend/uploads/
+
+# Dependencies
+node_modules/
+
+# Build output
+frontend/dist/
+
+# Security scan output
+backend/security/reports/
+
+# Large ML model files (>100MB, use Git LFS or download separately)
+backend/models/**/*.onnx
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log

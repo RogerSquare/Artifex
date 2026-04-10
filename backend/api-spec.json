@@ -1,0 +1,253 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Artifex Gallery API",
+    "version": "1.0.0",
+    "description": "AI-powered image and video gallery with auto-tagging, NSFW detection, and federation support."
+  },
+  "servers": [{ "url": "/api" }],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
+    },
+    "schemas": {
+      "Image": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "title": { "type": "string" },
+          "original_name": { "type": "string" },
+          "filepath": { "type": "string" },
+          "thumbnail_path": { "type": "string" },
+          "width": { "type": "integer" },
+          "height": { "type": "integer" },
+          "file_size": { "type": "integer" },
+          "format": { "type": "string" },
+          "media_type": { "type": "string", "enum": ["image", "video"] },
+          "visibility": { "type": "string", "enum": ["public", "private"] },
+          "prompt": { "type": "string" },
+          "model": { "type": "string" },
+          "caption": { "type": "string" },
+          "tags": { "type": "array", "items": { "$ref": "#/components/schemas/Tag" } },
+          "tagging_status": { "type": "string", "enum": ["processing", "done"] },
+          "is_favorited": { "type": "boolean" },
+          "favorite_count": { "type": "integer" },
+          "created_at": { "type": "string" }
+        }
+      },
+      "Tag": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "name": { "type": "string" },
+          "category": { "type": "string" },
+          "source": { "type": "string", "enum": ["metadata", "vision", "nsfw-detector", "manual"] }
+        }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "username": { "type": "string" },
+          "display_name": { "type": "string" },
+          "avatar": { "type": "string" },
+          "role": { "type": "string", "enum": ["admin", "member"] },
+          "storage_quota_bytes": { "type": "integer" },
+          "storage_used_bytes": { "type": "integer" }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": { "error": { "type": "string" } }
+      }
+    }
+  },
+  "paths": {
+    "/auth/register": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Register a new user",
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["username", "password"], "properties": { "username": { "type": "string", "minLength": 3 }, "password": { "type": "string", "minLength": 8 }, "display_name": { "type": "string" } } } } } },
+        "responses": { "201": { "description": "User created" }, "400": { "description": "Validation error" }, "409": { "description": "Username taken" } }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Login and get JWT token",
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["username", "password"], "properties": { "username": { "type": "string" }, "password": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Login successful, returns token" }, "401": { "description": "Invalid credentials" }, "403": { "description": "Account disabled" } }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": ["Auth"], "summary": "Get current user info", "security": [{ "bearerAuth": [] }],
+        "responses": { "200": { "description": "User info with storage quota" } }
+      }
+    },
+    "/auth/change-password": {
+      "put": {
+        "tags": ["Auth"], "summary": "Change own password", "security": [{ "bearerAuth": [] }],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["current_password", "new_password"], "properties": { "current_password": { "type": "string" }, "new_password": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Password changed" }, "401": { "description": "Wrong current password" } }
+      }
+    },
+    "/auth/password-strength": {
+      "post": {
+        "tags": ["Auth"], "summary": "Check password strength (no auth)",
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "password": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Strength score and validity" } }
+      }
+    },
+    "/auth/profile": {
+      "put": {
+        "tags": ["Auth"], "summary": "Update own profile", "security": [{ "bearerAuth": [] }],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "display_name": { "type": "string" }, "bio": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Updated profile" } }
+      }
+    },
+    "/auth/avatar": {
+      "post": {
+        "tags": ["Auth"], "summary": "Upload avatar", "security": [{ "bearerAuth": [] }],
+        "requestBody": { "content": { "multipart/form-data": { "schema": { "type": "object", "properties": { "avatar": { "type": "string", "format": "binary" } } } } } },
+        "responses": { "200": { "description": "Avatar URL" } }
+      }
+    },
+    "/auth/users/{username}": {
+      "get": {
+        "tags": ["Auth"], "summary": "Get public profile",
+        "parameters": [{ "name": "username", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Public profile" }, "404": { "description": "User not found" } }
+      }
+    },
+    "/images/upload": {
+      "post": {
+        "tags": ["Images"], "summary": "Upload images/videos (up to 50)", "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "skip_duplicates", "in": "query", "schema": { "type": "string", "default": "true" } }],
+        "requestBody": { "content": { "multipart/form-data": { "schema": { "type": "object", "properties": { "images": { "type": "array", "items": { "type": "string", "format": "binary" } } } } } } },
+        "responses": { "201": { "description": "Upload results with duplicate detection" }, "413": { "description": "Storage quota exceeded" } }
+      }
+    },
+    "/images": {
+      "get": {
+        "tags": ["Images"], "summary": "List all visible images (public + own private)",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } },
+          { "name": "model", "in": "query", "schema": { "type": "string" } },
+          { "name": "sampler", "in": "query", "schema": { "type": "string" } },
+          { "name": "media_type", "in": "query", "schema": { "type": "string", "enum": ["image", "video"] } },
+          { "name": "tag", "in": "query", "schema": { "type": "string" } },
+          { "name": "sort", "in": "query", "schema": { "type": "string", "enum": ["newest", "oldest"] } }
+        ],
+        "responses": { "200": { "description": "Paginated image list" } }
+      }
+    },
+    "/images/public": { "get": { "tags": ["Images"], "summary": "List public images", "responses": { "200": { "description": "Public images" } } } },
+    "/images/mine": { "get": { "tags": ["Images"], "summary": "List own images", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Own images" } } } },
+    "/images/favorites": { "get": { "tags": ["Images"], "summary": "List favorited images", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Favorites" } } } },
+    "/images/search": {
+      "get": {
+        "tags": ["Images"], "summary": "Full-text search (FTS5)",
+        "parameters": [{ "name": "q", "in": "query", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Search results" } }
+      }
+    },
+    "/images/duplicates": { "get": { "tags": ["Images"], "summary": "Find duplicate images by hash", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Duplicate groups" } } } },
+    "/images/{id}": {
+      "get": {
+        "tags": ["Images"], "summary": "Get single image with full metadata and tags",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "Image detail" }, "404": { "description": "Not found" } }
+      },
+      "delete": {
+        "tags": ["Images"], "summary": "Delete image (owner or admin)", "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "Deleted" }, "403": { "description": "Not owner" } }
+      }
+    },
+    "/images/{id}/visibility": {
+      "put": {
+        "tags": ["Images"], "summary": "Toggle public/private", "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "visibility": { "type": "string", "enum": ["public", "private"] } } } } } },
+        "responses": { "200": { "description": "Updated" } }
+      }
+    },
+    "/images/{id}/favorite": {
+      "post": {
+        "tags": ["Images"], "summary": "Toggle favorite", "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+        "responses": { "200": { "description": "Toggled" } }
+      }
+    },
+    "/images/favorites/reorder": {
+      "put": {
+        "tags": ["Images"], "summary": "Reorder favorites", "security": [{ "bearerAuth": [] }],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "imageIds": { "type": "array", "items": { "type": "integer" } } } } } } },
+        "responses": { "200": { "description": "Reordered" } }
+      }
+    },
+    "/images/batch/visibility": {
+      "put": {
+        "tags": ["Images"], "summary": "Bulk visibility change", "security": [{ "bearerAuth": [] }],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "ids": { "type": "array", "items": { "type": "integer" } }, "visibility": { "type": "string" } } } } } },
+        "responses": { "200": { "description": "Updated" } }
+      }
+    },
+    "/images/batch": {
+      "delete": {
+        "tags": ["Images"], "summary": "Bulk delete", "security": [{ "bearerAuth": [] }],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "ids": { "type": "array", "items": { "type": "integer" } } } } } } },
+        "responses": { "200": { "description": "Deleted" } }
+      }
+    },
+    "/collections": {
+      "get": { "tags": ["Collections"], "summary": "List collections", "responses": { "200": { "description": "Collection list" } } },
+      "post": {
+        "tags": ["Collections"], "summary": "Create collection", "security": [{ "bearerAuth": [] }],
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "required": ["name"], "properties": { "name": { "type": "string" }, "description": { "type": "string" } } } } } },
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/collections/{id}": {
+      "get": { "tags": ["Collections"], "summary": "Get collection detail", "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Collection with images" } } },
+      "put": { "tags": ["Collections"], "summary": "Update collection", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Updated" } } },
+      "delete": { "tags": ["Collections"], "summary": "Delete collection", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Deleted" } } }
+    },
+    "/collections/{id}/images": {
+      "post": { "tags": ["Collections"], "summary": "Add images to collection", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Added" } } }
+    },
+    "/collections/{id}/reorder": {
+      "put": { "tags": ["Collections"], "summary": "Reorder collection images", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Reordered" } } }
+    },
+    "/tags": { "get": { "tags": ["Tags"], "summary": "List all tags with counts", "parameters": [{ "name": "category", "in": "query", "schema": { "type": "string" } }], "responses": { "200": { "description": "Tag list" } } } },
+    "/tags/categories": { "get": { "tags": ["Tags"], "summary": "List tag categories", "responses": { "200": { "description": "Categories" } } } },
+    "/tags/search": { "get": { "tags": ["Tags"], "summary": "Search/autocomplete tags", "parameters": [{ "name": "q", "in": "query", "schema": { "type": "string" } }], "responses": { "200": { "description": "Matching tags" } } } },
+    "/tags/image/{imageId}": {
+      "get": { "tags": ["Tags"], "summary": "Get tags for image", "parameters": [{ "name": "imageId", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Tags" } } },
+      "post": { "tags": ["Tags"], "summary": "Add manual tag", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "imageId", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Tag added" } } }
+    },
+    "/tags/image/{imageId}/{tagId}": {
+      "delete": { "tags": ["Tags"], "summary": "Remove tag from image", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "imageId", "in": "path", "required": true, "schema": { "type": "integer" } }, { "name": "tagId", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Removed" } } }
+    },
+    "/tags/vision/batch": { "post": { "tags": ["ML"], "summary": "Batch vision tagging", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Processed count" } } } },
+    "/tags/nsfw/batch": { "post": { "tags": ["ML"], "summary": "Batch NSFW detection", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Processed count" } } } },
+    "/tags/caption/batch": { "post": { "tags": ["ML"], "summary": "Batch captioning", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Processed count" } } } },
+    "/tags/backfill": { "post": { "tags": ["ML"], "summary": "Backfill metadata tags", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Tagged count" } } } },
+    "/tags/jobs/stats": { "get": { "tags": ["ML"], "summary": "Job queue statistics", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Queue stats" } } } },
+    "/tags/jobs/retry": { "post": { "tags": ["ML"], "summary": "Retry all failed jobs", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Retried count" } } } },
+    "/tags/jobs/cleanup": { "delete": { "tags": ["ML"], "summary": "Clean completed jobs", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Cleaned count" } } } },
+    "/admin/stats": { "get": { "tags": ["Admin"], "summary": "System statistics", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Stats" } } } },
+    "/admin/users": { "get": { "tags": ["Admin"], "summary": "List all users", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "User list" } } } },
+    "/admin/users/{id}/role": { "put": { "tags": ["Admin"], "summary": "Change user role", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Updated" } } } },
+    "/admin/users/{id}/disable": { "put": { "tags": ["Admin"], "summary": "Toggle user disabled", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Toggled" } } } },
+    "/admin/users/{id}/quota": { "put": { "tags": ["Admin"], "summary": "Set storage quota", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Updated" } } } },
+    "/admin/users/{id}/data": { "delete": { "tags": ["Admin"], "summary": "Purge user data", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Purged" } } } },
+    "/admin/users/{id}": { "delete": { "tags": ["Admin"], "summary": "Delete user account", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }, { "name": "purge", "in": "query", "schema": { "type": "string" } }], "responses": { "200": { "description": "Deleted" } } } },
+    "/admin/audit": { "get": { "tags": ["Admin"], "summary": "View audit logs", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "action", "in": "query", "schema": { "type": "string" } }, { "name": "user_id", "in": "query", "schema": { "type": "integer" } }], "responses": { "200": { "description": "Audit logs" } } } },
+    "/admin/recalculate-storage": { "post": { "tags": ["Admin"], "summary": "Recalculate storage for all users", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Recalculated" } } } },
+    "/health": { "get": { "tags": ["System"], "summary": "System health check", "responses": { "200": { "description": "Health status with memory, disk, DB, workers" } } } },
+    "/metrics": { "get": { "tags": ["System"], "summary": "Prometheus metrics", "responses": { "200": { "description": "Prometheus text format" } } } }
+  }
+}

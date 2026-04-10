@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 48 48">
+  <defs>
+    <style>
+      .st0 {
+        fill-rule: evenodd;
+      }
+
+      .st0, .st1 {
+        fill: #2a5aff;
+      }
+    </style>
+  </defs>
+  <path class="st0" d="M38.5,38.5H9.5V9.5h29v29h0ZM13.2,35h21.6V13H13.2v22h0Z"/>
+  <rect class="st1" x="34.8" y="1" width="3.5" height="6"/>
+  <rect class="st1" x="9.5" y="1" width="3.5" height="6.2"/>
+  <rect class="st1" x="34.8" y="40.5" width="3.5" height="6"/>
+  <rect class="st1" x="9.5" y="40.5" width="3.5" height="6.2"/>
+  <rect class="st1" x="40.5" y="34.8" width="6.2" height="3.5"/>
+  <rect class="st1" x="1" y="34.8" width="6.2" height="3.5"/>
+  <rect class="st1" x="40.5" y="9.5" width="6.5" height="3.5"/>
+  <rect class="st1" x="1" y="9.5" width="6.2" height="3.5"/>
+</svg>

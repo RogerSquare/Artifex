@@ -1,0 +1,69 @@
+---
+# OWASP ZAP Automation Framework configuration for Artifex API
+# Run with: zap.sh -cmd -autorun zap-config.yaml
+
+env:
+  contexts:
+    - name: "Artifex API"
+      urls:
+        - "http://localhost:3002"
+      includePaths:
+        - "http://localhost:3002/api/.*"
+      excludePaths:
+        - "http://localhost:3002/uploads/.*"
+      authentication:
+        method: "json"
+        parameters:
+          loginPageUrl: "http://localhost:3002/api/auth/login"
+          loginRequestUrl: "http://localhost:3002/api/auth/login"
+          loginRequestBody: '{"username":"{%username%}","password":"{%password%}"}'
+          tokenExtract: "$.token"
+        verification:
+          method: "response"
+          pollUrl: "http://localhost:3002/api/auth/me"
+          pollHeaders: "Authorization: Bearer {%token%}"
+      users:
+        - name: "admin"
+          credentials:
+            username: "zaptest"
+            password: "ZapTest123!"
+
+jobs:
+  # Import OpenAPI spec
+  - type: openApi
+    parameters:
+      apiUrl: "http://localhost:3002/api/docs/spec.json"
+      context: "Artifex API"
+
+  # Passive scan (analyze responses)
+  - type: passiveScan-config
+    parameters:
+      maxAlertsPerRule: 10
+      scanOnlyInScope: true
+
+  # Spider the API
+  - type: spider
+    parameters:
+      context: "Artifex API"
+      maxDuration: 5
+      maxDepth: 5
+
+  # Active scan (test for vulnerabilities)
+  - type: activeScan
+    parameters:
+      context: "Artifex API"
+      maxRuleDurationInMins: 2
+      maxScanDurationInMins: 15
+      policy: "API-Scan"
+
+  # Generate HTML report
+  - type: report
+    parameters:
+      template: "modern"
+      reportDir: "/zap/reports"
+      reportFile: "artifex-zap-report"
+    risks:
+      - high
+      - medium
+      - low
+      - info

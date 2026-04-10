@@ -1,0 +1,14 @@
+node_modules
+frontend/node_modules
+frontend/dist
+backend/node_modules
+backend/uploads
+backend/gallery.db
+backend/gallery.db-wal
+backend/gallery.db-shm
+backend/models
+backend/.jwt-secret
+backend/security/reports
+.env
+.git
+*.md

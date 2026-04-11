@@ -1,3 +1,5 @@
+![CI](https://github.com/RogerSquare/Artifex/actions/workflows/ci.yml/badge.svg)
+
 # Artifex
 
 A self-hosted AI image gallery with ML-powered auto-tagging, content analysis, and federation support. Artifex lets you upload, organize, search, and share AI-generated images with intelligent metadata extraction handled automatically in the background.

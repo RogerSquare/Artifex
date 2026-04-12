@@ -76,7 +76,7 @@ export default function GalleryGrid({ filters, galleryTab = 'all', gridSize = 'c
         setImages(prev => append ? [...prev, ...data.images] : data.images)
         setTotal(data.total)
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     finally {
       setLoading(false)
       setLoadingMore(false)

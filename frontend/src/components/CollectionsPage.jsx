@@ -3,7 +3,7 @@ import { Plus, Trash, Globe, Lock, FolderOpen, X, Image, Play } from '@phosphor-
 import { useAuth } from '../context/AuthContext'
 import { API_URL, UPLOADS_URL } from '../config'
 
-export default function CollectionsPage({ onSelectCollection, onSelectImage }) {
+export default function CollectionsPage({ onSelectCollection }) {
   const { user, authHeaders } = useAuth()
   const [collections, setCollections] = useState([])
   const [loading, setLoading] = useState(true)

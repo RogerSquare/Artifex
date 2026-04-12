@@ -19,10 +19,6 @@ export default function SearchFilterBar({ filters, onFiltersChange, galleryTab, 
     onFiltersChange(next)
   }, [filters, onFiltersChange])
 
-  const clearAll = useCallback(() => {
-    onFiltersChange({})
-  }, [onFiltersChange])
-
   const activeCount = [filters.model, filters.sampler, filters.has_metadata !== undefined ? String(filters.has_metadata) : null, filters.media_type, filters.sort, filters.tag].filter(Boolean).length
 
   if (activeCount === 0 && tags.models.length === 0 && tags.samplers.length === 0) return null
@@ -94,9 +90,6 @@ export default function SearchFilterBar({ filters, onFiltersChange, galleryTab, 
         </div>
       )}
 
-      {false && activeCount > 0 && (
-        <button onClick={clearAll} className="hidden">Clear</button>
-      )}
     </div>
   )
 }

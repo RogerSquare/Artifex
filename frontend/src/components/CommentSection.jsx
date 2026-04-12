@@ -14,7 +14,7 @@ export default function CommentSection({ imageId }) {
     try {
       const res = await fetch(`${API_URL}/images/${imageId}/comments`)
       if (res.ok) setComments(await res.json())
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
   }, [imageId])
 
   useEffect(() => { fetchComments() }, [fetchComments])
@@ -35,7 +35,7 @@ export default function CommentSection({ imageId }) {
         setInput('')
         setTimeout(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), 100)
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     finally { setSending(false) }
   }
 
@@ -43,7 +43,7 @@ export default function CommentSection({ imageId }) {
     try {
       const res = await fetch(`${API_URL}/images/${imageId}/comments/${commentId}`, { method: 'DELETE', headers: authHeaders })
       if (res.ok) setComments(prev => prev.filter(c => c.id !== commentId))
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
   }
 
   const timeAgo = (dateStr) => {

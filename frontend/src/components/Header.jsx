@@ -15,7 +15,7 @@ const PUBLIC_TABS = [
   { id: 'public', label: 'Public', icon: Globe },
 ]
 
-export default function Header({ imageCount, onUpload, onImport, galleryTab, onTabChange, searchQuery, onSearchChange, onOpenAdmin, onOpenTheme, onOpenProfile, onOpenShortcuts, onOpenStats, onLogin }) {
+export default function Header({ onUpload, onImport, galleryTab, onTabChange, searchQuery, onSearchChange, onOpenAdmin, onOpenTheme, onOpenProfile, onOpenShortcuts, onOpenStats, onLogin }) {
   const { user, logout } = useAuth()
   const [showAddMenu, setShowAddMenu] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)

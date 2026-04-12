@@ -94,7 +94,7 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
         const data = await res.json()
         setCollections(data.filter(c => c.user_id === currentUserId))
       }
-    } catch (e) {}
+    } catch {}
     setShowCollectionPicker(true)
   }
 
@@ -108,7 +108,7 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
       const col = collections.find(c => c.id === collectionId)
       setAddedToCollection(col?.name || 'collection')
       setTimeout(() => setAddedToCollection(null), 2000)
-    } catch (e) {}
+    } catch {}
     setShowCollectionPicker(false)
   }
 

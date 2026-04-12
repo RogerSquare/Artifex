@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Sparkle, Lock, Heart, ChatCircle, ShareNetwork } from '@phosphor-icons/react'
 import { UPLOADS_URL } from '../config'
 

@@ -46,7 +46,7 @@ export default function FederatedGrid({ gridSize = 'comfortable', authHeaders = 
         setImages(prev => append ? [...prev, ...data.images] : data.images)
         setTotal(data.total)
       }
-    } catch (e) {}
+    } catch {}
     setLoading(false)
     setLoadingMore(false)
   }, [selectedPeer, authHeaders])
@@ -58,7 +58,7 @@ export default function FederatedGrid({ gridSize = 'comfortable', authHeaders = 
         const data = await res.json()
         setPeers(data.peers || [])
       }
-    } catch (e) {}
+    } catch {}
   }, [authHeaders])
 
   useEffect(() => { fetchPeers() }, [fetchPeers])

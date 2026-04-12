@@ -99,7 +99,7 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/images/batch/visibility`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ ids: selectedIds, visibility }) })
       if (res.ok) { exitSelectMode(); setRefreshKey(prev => prev + 1) }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
   }, [selectedIds, authHeaders, exitSelectMode])
 
   const handleBulkDelete = useCallback(async () => {
@@ -107,7 +107,7 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/images/batch`, { method: 'DELETE', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ ids: selectedIds }) })
       if (res.ok) { exitSelectMode(); setRefreshKey(prev => prev + 1) }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
   }, [selectedIds, authHeaders, exitSelectMode])
 
   const openBulkCollectionPicker = useCallback(async () => {
@@ -117,7 +117,7 @@ function App() {
         const data = await res.json()
         setBulkCollections(data.filter(c => c.user_id === user?.id))
       }
-    } catch (e) {}
+    } catch {}
     setShowBulkCollectionPicker(true)
   }, [authHeaders, user?.id])
 
@@ -135,7 +135,7 @@ function App() {
         setBulkAddedMsg(`Added ${data.added} to "${col?.name}"`)
         setTimeout(() => setBulkAddedMsg(null), 2500)
       }
-    } catch (e) {}
+    } catch {}
     setShowBulkCollectionPicker(false)
   }, [selectedIds, authHeaders, bulkCollections])
 
@@ -149,7 +149,7 @@ function App() {
       )
       exitSelectMode()
       setRefreshKey(prev => prev + 1)
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
   }, [selectedIds, selectedCollection, authHeaders, exitSelectMode])
 
   const handleToggleFavorite = useCallback(async (imageId) => {
@@ -159,7 +159,7 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/images/${imageId}/favorite`, { method: 'POST', headers: authHeaders })
       if (!res.ok) { setGalleryImages(prev => prev.map(img => img.id === imageId ? toggle(img) : img)); setSelectedImage(prev => prev?.id === imageId ? toggle(prev) : prev) }
-    } catch (e) { setGalleryImages(prev => prev.map(img => img.id === imageId ? toggle(img) : img)); setSelectedImage(prev => prev?.id === imageId ? toggle(prev) : prev) }
+    } catch { setGalleryImages(prev => prev.map(img => img.id === imageId ? toggle(img) : img)); setSelectedImage(prev => prev?.id === imageId ? toggle(prev) : prev) }
   }, [authHeaders])
 
   useEffect(() => {
@@ -210,14 +210,14 @@ function App() {
   const handleUploadComplete = useCallback(() => setRefreshKey(prev => prev + 1), [])
 
   const handleDelete = useCallback(async (id) => {
-    try { const res = await fetch(`${API_URL}/images/${id}`, { method: 'DELETE', headers: authHeaders }); if (res.ok) { setSelectedImage(null); setRefreshKey(prev => prev + 1) } } catch (e) { /* ignore */ }
+    try { const res = await fetch(`${API_URL}/images/${id}`, { method: 'DELETE', headers: authHeaders }); if (res.ok) { setSelectedImage(null); setRefreshKey(prev => prev + 1) } } catch { /* ignore */ }
   }, [authHeaders])
 
   const handleToggleVisibility = useCallback(async (id, newVisibility) => {
     try {
       const res = await fetch(`${API_URL}/images/${id}/visibility`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ visibility: newVisibility }) })
       if (res.ok) { setSelectedImage(prev => prev?.id === id ? { ...prev, visibility: newVisibility } : prev); setRefreshKey(prev => prev + 1) }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
   }, [authHeaders])
 
   const handleImagesChange = useCallback((images) => { setGalleryImages(images); setImageCount(images.length) }, [])
@@ -315,7 +315,7 @@ function App() {
                           try {
                             const res = await fetch(`${API_URL}/images/favorites/reorder`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ imageIds: reorderImageIds }) })
                             if (res.ok) { setReorderMode(false); setReorderImageIds(null); setRefreshKey(prev => prev + 1) }
-                          } catch (e) {} finally { setReorderSaving(false) }
+                          } catch {} finally { setReorderSaving(false) }
                         }} disabled={reorderSaving} className="px-2.5 h-7 rounded-md text-[13px] font-medium bg-accent text-white hover:bg-accent-hover transition-all duration-200 shrink-0 flex items-center gap-1.5">
                           {reorderSaving && <CircleNotch className="w-3 h-3 animate-spin" />} Save Order
                         </button>
@@ -391,7 +391,7 @@ function App() {
             try {
               await fetch(`${API_URL}/images/upload`, { method: 'POST', body: formData, headers: authHeaders })
               setRefreshKey(prev => prev + 1)
-            } catch (e) { /* ignore */ }
+            } catch { /* ignore */ }
           }}
         >
           <div className="flex items-center gap-2 mb-4">

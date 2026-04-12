@@ -91,7 +91,7 @@ export default function StatsDashboard({ onBack }) {
       try {
         const res = await fetch(`${API_URL}/admin/generation-stats`, { headers: authHeaders })
         if (res.ok) setStats(await res.json())
-      } catch (e) {}
+      } catch {}
       setLoading(false)
     })()
   }, [authHeaders])

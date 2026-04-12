@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo } from 'react'
 import { CaretRight, Sparkle, TreeStructure, Sliders, FileText, FilmStrip, Tag, X, Plus, CircleNotch, Eye } from '@phosphor-icons/react'
 import CopyButton from './CopyButton'
 import { API_URL } from '../config'
@@ -21,32 +21,16 @@ function Section({ title, icon: Icon, defaultOpen = false, children, actions }) 
   )
 }
 
-export default function MetadataPanel({ image, authHeaders = {}, onTagFilter }) {
-  if (!image) return null
-
-  const hasPrompt = image.prompt || image.negative_prompt
-  const hasParams = image.model || image.sampler || image.steps || image.cfg_scale || image.seed
-  const hasWorkflow = !!(image.prompt_json || image.workflow_json)
-  const hasRaw = !!image.metadata_raw
-
-  // Parse video metadata JSON
+export default function MetadataPanel({ image, onTagFilter }) {
+  // All hooks must run unconditionally — early returns happen after hooks.
   const videoMeta = useMemo(() => {
-    if (!image.video_metadata) return null
+    if (!image?.video_metadata) return null
     try { return typeof image.video_metadata === 'string' ? JSON.parse(image.video_metadata) : image.video_metadata }
     catch { return null }
-  }, [image.video_metadata])
-
-  const hasVideoMeta = !!videoMeta
-
-  if (!image.has_metadata && !hasPrompt && !hasParams && !hasWorkflow && !hasVideoMeta) {
-    return (
-      <div className="text-center py-8">
-        <p className="text-[13px] text-text-muted">No generation data</p>
-      </div>
-    )
-  }
+  }, [image?.video_metadata])
 
   const fullMetadata = useMemo(() => {
+    if (!image) return ''
     const parts = []
     if (image.prompt) parts.push(`Prompt: ${image.prompt}`)
     if (image.negative_prompt) parts.push(`Negative prompt: ${image.negative_prompt}`)
@@ -59,7 +43,7 @@ export default function MetadataPanel({ image, authHeaders = {}, onTagFilter }) 
   }, [image])
 
   const workflowNodes = useMemo(() => {
-    const src = image.prompt_json || image.workflow_json
+    const src = image?.prompt_json || image?.workflow_json
     if (!src) return null
     try {
       const data = JSON.parse(src)
@@ -69,18 +53,16 @@ export default function MetadataPanel({ image, authHeaders = {}, onTagFilter }) 
       if (typeof data === 'object' && !Array.isArray(data)) {
         return Object.entries(data).map(([id, node]) => ({ id, class_type: node.class_type || 'Unknown', inputs: node.inputs || {} }))
       }
-    } catch (e) { /* invalid */ }
+    } catch { /* invalid */ }
     return null
-  }, [image.prompt_json, image.workflow_json])
+  }, [image?.prompt_json, image?.workflow_json])
 
-  // Extract prompt text from workflow nodes as fallback when image.prompt is null
   const workflowPromptText = useMemo(() => {
-    if (image.prompt) return image.prompt // already have it
+    if (image?.prompt) return image.prompt
     if (!workflowNodes) return null
     const textFields = ['prompt_text', 'text', 'string', 'value']
     const texts = []
     for (const node of workflowNodes) {
-      // Look for text encode or prompt nodes
       const cls = (node.class_type || '').toLowerCase()
       if (cls.includes('text') || cls.includes('prompt') || cls.includes('string') || cls.includes('clip')) {
         for (const field of textFields) {
@@ -92,7 +74,23 @@ export default function MetadataPanel({ image, authHeaders = {}, onTagFilter }) 
       }
     }
     return texts.length > 0 ? texts[0] : null
-  }, [image.prompt, workflowNodes])
+  }, [image?.prompt, workflowNodes])
+
+  if (!image) return null
+
+  const hasPrompt = image.prompt || image.negative_prompt
+  const hasParams = image.model || image.sampler || image.steps || image.cfg_scale || image.seed
+  const hasWorkflow = !!(image.prompt_json || image.workflow_json)
+  const hasRaw = !!image.metadata_raw
+  const hasVideoMeta = !!videoMeta
+
+  if (!image.has_metadata && !hasPrompt && !hasParams && !hasWorkflow && !hasVideoMeta) {
+    return (
+      <div className="text-center py-8">
+        <p className="text-[13px] text-text-muted">No generation data</p>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">

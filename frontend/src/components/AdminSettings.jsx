@@ -126,7 +126,7 @@ function AuditTab({ authHeaders }) {
         setLogs(off === 0 ? data.logs : prev => [...prev, ...data.logs])
         setTotal(data.total)
       }
-    } catch (e) {}
+    } catch {}
     setLoading(false)
   }, [authHeaders, filter])
 
@@ -185,7 +185,7 @@ function JobsTab({ authHeaders }) {
     try {
       const res = await fetch(`${API_URL}/tags/jobs/stats`, { headers: authHeaders })
       if (res.ok) setStats(await res.json())
-    } catch (e) {}
+    } catch {}
   }, [authHeaders])
 
   useEffect(() => { fetchStats(); const t = setInterval(fetchStats, 5000); return () => clearInterval(t) }, [fetchStats])
@@ -240,7 +240,7 @@ function JobsTab({ authHeaders }) {
 }
 
 // ─── Users Tab ───
-function UsersTab({ authHeaders, currentUser }) {
+function UsersTab({ authHeaders }) {
   const [users, setUsers] = useState([])
   const [resetPasswordId, setResetPasswordId] = useState(null)
   const [newPassword, setNewPassword] = useState('')
@@ -250,7 +250,7 @@ function UsersTab({ authHeaders, currentUser }) {
     try {
       const res = await fetch(`${API_URL}/admin/users`, { headers: authHeaders })
       if (res.ok) setUsers(await res.json())
-    } catch (e) {}
+    } catch {}
   }, [authHeaders])
 
   useEffect(() => { fetchUsers() }, [fetchUsers])
@@ -273,7 +273,7 @@ function UsersTab({ authHeaders, currentUser }) {
       }
       setConfirmAction(null)
       fetchUsers()
-    } catch (e) {}
+    } catch {}
   }
 
   return (
@@ -349,7 +349,7 @@ function ModerationTab({ authHeaders }) {
       try {
         const res = await fetch(`${API_URL}/images?tag=explicit&limit=50`, { headers: authHeaders })
         if (res.ok) { const d = await res.json(); setFlagged(d.images || []) }
-      } catch (e) {}
+      } catch {}
       setLoading(false)
     })()
   }, [authHeaders])
@@ -475,7 +475,7 @@ function FederationTab({ authHeaders }) {
       ])
       if (settingsRes.ok) setSettings(await settingsRes.json())
       if (peersRes.ok) { const d = await peersRes.json(); setPeers(d.peers || []) }
-    } catch (e) {}
+    } catch {}
   }, [authHeaders])
 
   useEffect(() => { fetchData() }, [fetchData])
@@ -499,7 +499,7 @@ function FederationTab({ authHeaders }) {
       const data = await res.json()
       if (!res.ok) setError(data.error)
       else { setNewPeerUrl(''); fetchData() }
-    } catch (e) { setError('Failed to connect') }
+    } catch { setError('Failed to connect') }
     setAdding(false)
   }
 
@@ -640,7 +640,7 @@ function SystemTab({ authHeaders }) {
     setLoading(prev => ({ ...prev, [key]: true }))
     try {
       await fetch(`${API_URL}/tags/${endpoint}?limit=100`, { method: 'POST', headers: authHeaders })
-    } catch (e) {}
+    } catch {}
     setLoading(prev => ({ ...prev, [key]: false }))
   }
 

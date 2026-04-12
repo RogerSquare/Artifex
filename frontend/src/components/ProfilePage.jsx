@@ -34,7 +34,7 @@ export default function ProfilePage({ username, onBack, onSelectImage }) {
         const data = await imagesRes.json()
         setImages(data.images)
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     finally { setLoading(false) }
   }, [username])
 
@@ -53,7 +53,7 @@ export default function ProfilePage({ username, onBack, onSelectImage }) {
         setProfile(prev => ({ ...prev, display_name: data.display_name, bio: data.bio }))
         setEditing(false)
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     finally { setSaving(false) }
   }
 
@@ -69,7 +69,7 @@ export default function ProfilePage({ username, onBack, onSelectImage }) {
         const data = await res.json()
         setProfile(prev => ({ ...prev, avatar: data.avatar }))
       }
-    } catch (e) { /* ignore */ }
+    } catch { /* ignore */ }
     finally { setUploadingAvatar(false); e.target.value = '' }
   }
 

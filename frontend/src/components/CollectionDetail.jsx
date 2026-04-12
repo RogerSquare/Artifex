@@ -76,7 +76,7 @@ export default function CollectionDetail({ collection, onBack, onSelectImage, se
         setReorderedImages(null)
         fetchDetail()
       }
-    } catch (e) { fetchDetail() }
+    } catch { fetchDetail() }
     finally { setReorderSaving(false) }
   }, [reorderedImages, collection.id, authHeaders, fetchDetail])
 

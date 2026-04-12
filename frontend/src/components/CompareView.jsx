@@ -2,6 +2,10 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { X, ArrowsLeftRight, CaretLeft, CaretRight, MagnifyingGlassPlus, MagnifyingGlassMinus, ArrowsOut, DotsSixVertical } from '@phosphor-icons/react'
 import { UPLOADS_URL } from '../config'
 
+const Btn = ({ onClick, active, children, ...props }) => (
+  <button onClick={onClick} className={`p-1.5 rounded-md transition-all duration-200 ${active ? 'text-white bg-white/[0.1]' : 'text-white/40 hover:text-white/80 hover:bg-white/[0.06]'}`} {...props}>{children}</button>
+)
+
 export default function CompareView({ imageA, imageB, onClose }) {
   const [mode, setMode] = useState('side') // 'side' | 'slider'
   const [zoom, setZoom] = useState(1)
@@ -60,10 +64,6 @@ export default function CompareView({ imageA, imageB, onClose }) {
       return () => { window.removeEventListener('mousemove', handleMouseMove); window.removeEventListener('mouseup', handleMouseUp) }
     }
   }, [draggingPan, draggingSlider, handleMouseMove, handleMouseUp])
-
-  const Btn = ({ onClick, active, children, ...props }) => (
-    <button onClick={onClick} className={`p-1.5 rounded-md transition-all duration-200 ${active ? 'text-white bg-white/[0.1]' : 'text-white/40 hover:text-white/80 hover:bg-white/[0.06]'}`} {...props}>{children}</button>
-  )
 
   // Metadata comparison
   const metaFields = ['model', 'sampler', 'steps', 'cfg_scale', 'seed']

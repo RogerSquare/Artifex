@@ -5,6 +5,10 @@ import { useAuth } from '../context/AuthContext'
 import MetadataPanel from './MetadataPanel'
 import CommentSection from './CommentSection'
 
+const Btn = ({ onClick, active, children, ...props }) => (
+  <button onClick={onClick} className={`p-1.5 rounded-md transition-all duration-200 ${active ? 'text-white' : 'text-white/40 hover:text-white/80 hover:bg-white/[0.06]'}`} {...props}>{children}</button>
+)
+
 export default function PhotoViewer({ image, images, onClose, onNavigate, onDelete, onToggleVisibility, onToggleFavorite, currentUserId, onViewProfile, onTagFilter }) {
   const { authHeaders } = useAuth()
   const [shareCopied, setShareCopied] = useState(false)
@@ -111,11 +115,6 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
     } catch {}
     setShowCollectionPicker(false)
   }
-
-  // Consistent icon button
-  const Btn = ({ onClick, active, children, ...props }) => (
-    <button onClick={onClick} className={`p-1.5 rounded-md transition-all duration-200 ${active ? 'text-white' : 'text-white/40 hover:text-white/80 hover:bg-white/[0.06]'}`} {...props}>{children}</button>
-  )
 
   return (
     <div className="fixed inset-0 z-50 bg-black/95 flex animate-in fade-in duration-200">

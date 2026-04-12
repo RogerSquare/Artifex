@@ -6,11 +6,12 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [token, setToken] = useState(() => localStorage.getItem('galleryToken'))
-  const [loading, setLoading] = useState(true)
+  // Lazy init: if there's no token, we're not loading anything — skip the spinner.
+  const [loading, setLoading] = useState(() => !!localStorage.getItem('galleryToken'))
 
   // Verify token on mount
   useEffect(() => {
-    if (!token) { setLoading(false); return }
+    if (!token) return
 
     fetch(`${API_URL}/auth/me`, {
       headers: { Authorization: `Bearer ${token}` }

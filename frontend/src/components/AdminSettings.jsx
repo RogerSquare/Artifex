@@ -130,6 +130,7 @@ function AuditTab({ authHeaders }) {
     setLoading(false)
   }, [authHeaders, filter])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paging when filter changes
   useEffect(() => { setOffset(0); fetchLogs(0) }, [fetchLogs])
 
   return (
@@ -188,6 +189,7 @@ function JobsTab({ authHeaders }) {
     } catch {}
   }, [authHeaders])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard data-fetch + polling effect
   useEffect(() => { fetchStats(); const t = setInterval(fetchStats, 5000); return () => clearInterval(t) }, [fetchStats])
 
   const retryFailed = async () => {
@@ -253,6 +255,7 @@ function UsersTab({ authHeaders }) {
     } catch {}
   }, [authHeaders])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard data-fetch on mount
   useEffect(() => { fetchUsers() }, [fetchUsers])
 
   const handleAction = async (type, userId) => {
@@ -478,6 +481,7 @@ function FederationTab({ authHeaders }) {
     } catch {}
   }, [authHeaders])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard data-fetch on mount
   useEffect(() => { fetchData() }, [fetchData])
 
   const updateSetting = async (field, value) => {

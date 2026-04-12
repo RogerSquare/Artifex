@@ -35,6 +35,7 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
   const [remoteDetail, setRemoteDetail] = useState(null)
   useEffect(() => {
     if (isRemote && image.peer_id) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset when switching images
       setRemoteDetail(null)
       fetch(`${API_URL}/federation/proxy/${image.peer_id}/${image.id}/detail`)
         .then(r => r.json())

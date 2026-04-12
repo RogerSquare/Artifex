@@ -61,7 +61,9 @@ export default function FederatedGrid({ gridSize = 'comfortable', authHeaders = 
     } catch {}
   }, [authHeaders])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- standard data-fetch on mount
   useEffect(() => { fetchPeers() }, [fetchPeers])
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- reset-and-refetch when filters change
   useEffect(() => { setImages([]); fetchImages(0) }, [fetchImages])
 
   const columnCount = useColumnCount(gridSize)

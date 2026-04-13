@@ -2,6 +2,16 @@
 
 # Artifex
 
+> Self-hosted AI image gallery with Python-subprocess ML pipelines, SQLite FTS5 search, and federation across instances.
+
+**Live demo:** Screenshots in `/docs/screenshots/`; local run via `docker compose up`
+**Stack:** Node.js / Express 5 · React · SQLite (better-sqlite3) · Python subprocess ML (WD Tagger, BLIP, NSFW detector) · JWT auth · Socket.io
+**Status:** Active
+
+## What's interesting technically
+
+ML inference doesn't run in Node (onnxruntime-node has opset compatibility issues on Windows). Instead, each ML task runs as a **persistent Python HTTP server** that the Node backend calls over localhost. The server loads the model once on first request (~3s) and serves subsequent classifications in ~200ms — auto-starts on first use, auto-shuts down with the Node process. This keeps the ML pipeline decoupled from the Node runtime: upgrade path is swap the Python server for a different model runtime without touching the queueing or API layer. Federation uses a pull-and-proxy pattern: peer instances publish a manifest, subscribers fetch on demand, no central registry.
+
 A self-hosted AI image gallery with ML-powered auto-tagging, content analysis, and federation support. Artifex lets you upload, organize, search, and share AI-generated images with intelligent metadata extraction handled automatically in the background.
 
 ## Overview

@@ -1,5 +1,10 @@
 ![CI](https://github.com/RogerSquare/Artifex/actions/workflows/ci.yml/badge.svg)
 
+
+<img width="1870" height="1382" alt="Screenshot 2026-04-16 at 02-29-52 Artifex" src="https://github.com/user-attachments/assets/90974f60-7541-4dd5-84b4-ebcc913c7462" />
+<img width="1870" height="1382" alt="Screenshot 2026-04-16 at 02-30-39 Artifex" src="https://github.com/user-attachments/assets/1a65c6af-d9cc-400d-b046-a3e7c6190fba" />
+
+
 # Artifex
 
 > Self-hosted AI image gallery with Python-subprocess ML pipelines, SQLite FTS5 search, and federation across instances.

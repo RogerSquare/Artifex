@@ -27,3 +27,20 @@ backend/models/**/*.onnx
 .DS_Store
 Thumbs.db
 *.log
+
+# --- secrets-baseline (via feat-secrets-audit-001) ---
+.env
+.env.*
+!.env.example
+!.env.sample
+.envrc
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+credentials*.json
+secrets*.json
+service-account*.json
+*.pfx
+*.p12
+.secrets.baseline

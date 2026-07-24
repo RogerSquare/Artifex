@@ -15,7 +15,7 @@
 
 ## What's interesting technically
 
-ML inference doesn't run in Node (onnxruntime-node has opset compatibility issues on Windows). Instead, each ML task runs as a **persistent Python HTTP server** that the Node backend calls over localhost. The server loads the model once on first request (~3s) and serves subsequent classifications in ~200ms — auto-starts on first use, auto-shuts down with the Node process. This keeps the ML pipeline decoupled from the Node runtime: upgrade path is swap the Python server for a different model runtime without touching the queueing or API layer. Federation uses a pull-and-proxy pattern: peer instances publish a manifest, subscribers fetch on demand, no central registry.
+ML inference doesn't run in Node (onnxruntime-node has opset compatibility issues on Windows). Instead, each ML task runs as a **persistent Python HTTP server** that the Node backend calls over localhost. The server loads the model once on first request (~3s) and serves subsequent classifications in ~200ms — auto-starts on first use, auto-shuts down with the Node process. This keeps the ML pipeline decoupled from the Node runtime: upgrade path is swap the Python server for a different model runtime without touching the queueing or API layer. Federation uses a manifest + metadata-sync pattern: admins keep a simple list of peer URLs, full image metadata (prompts, workflow JSON, video details) syncs into a local cache for browsing, and media loads full-quality directly from the source peer in the browser via CORS-enabled federation endpoints — no central registry, no proxy bandwidth.
 
 A self-hosted AI image gallery with ML-powered auto-tagging, content analysis, and federation support. Artifex lets you upload, organize, search, and share AI-generated images with intelligent metadata extraction handled automatically in the background.
 
@@ -42,7 +42,7 @@ The application supports multi-user authentication with role-based access, image
 - **Full-text search**: Search across tags, captions, filenames, and metadata
 - **Collections**: Organize images into named collections
 - **Multi-user auth**: JWT-based authentication with admin and standard roles
-- **Federation**: Peer-to-peer sync between Artifex instances
+- **Federation**: Peer-to-peer galleries — add peer URLs, browse their public images and videos at full quality with complete metadata
 - **Video support**: Upload videos with automatic frame extraction and thumbnail generation
 - **Rate limiting**: Built-in rate limiting on public-facing endpoints
 - **API documentation**: Swagger UI available at `/api-docs`

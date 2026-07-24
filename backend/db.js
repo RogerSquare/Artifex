@@ -230,6 +230,16 @@ const initDb = () => {
     );
   `);
 
+  // Federation rework: remote_images gained full metadata columns (schema v2).
+  // Old-schema tables (no file_hash column) are dropped and rebuilt by the
+  // CREATE below; rows re-sync from peers (wipe authorized by the rework).
+  const remoteImagesOldSchema =
+    db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'remote_images'").get() &&
+    !db.prepare("SELECT 1 AS x FROM pragma_table_info('remote_images') WHERE name = 'file_hash'").get();
+  if (remoteImagesOldSchema) {
+    db.exec('DROP TABLE remote_images');
+  }
+
   // Federation peers and remote images
   db.exec(`
     CREATE TABLE IF NOT EXISTS peers (
@@ -253,12 +263,26 @@ const initDb = () => {
       thumbnail_path TEXT,
       tags_json TEXT,
       caption TEXT,
-      metadata_json TEXT,
       uploaded_by TEXT,
       width INTEGER,
       height INTEGER,
       format TEXT,
       media_type TEXT DEFAULT 'image',
+      prompt TEXT,
+      negative_prompt TEXT,
+      model TEXT,
+      sampler TEXT,
+      steps INTEGER,
+      cfg_scale REAL,
+      seed TEXT,
+      workflow_json TEXT,
+      prompt_json TEXT,
+      video_metadata TEXT,
+      duration REAL,
+      file_size INTEGER,
+      file_hash TEXT,
+      filepath TEXT,
+      preview_path TEXT,
       remote_created_at TEXT,
       synced_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (peer_id) REFERENCES peers(id) ON DELETE CASCADE,

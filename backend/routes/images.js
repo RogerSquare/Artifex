@@ -247,7 +247,10 @@ router.get('/public', (req, res) => {
           const remoteImages = db.prepare(`
             SELECT ri.remote_id as id, ri.title, ri.width, ri.height, ri.format, ri.media_type,
               ri.caption, ri.remote_created_at as created_at, ri.uploaded_by,
-              ri.thumbnail_path, ri.thumbnail_cached, ri.tags_json, ri.metadata_json,
+              ri.thumbnail_path, ri.thumbnail_cached, ri.tags_json,
+              ri.prompt, ri.negative_prompt, ri.model, ri.sampler, ri.steps,
+              ri.cfg_scale, ri.seed, ri.workflow_json, ri.prompt_json,
+              ri.video_metadata, ri.duration, ri.file_size, ri.file_hash,
               ri.peer_id, p.name as peer_name, p.url as peer_url
             FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
             WHERE p.status = 'active'
@@ -262,11 +265,7 @@ router.get('/public', (req, res) => {
             favorite_count: 0,
             comment_count: 0,
             tags: img.tags_json ? JSON.parse(img.tags_json) : [],
-            prompt: img.metadata_json ? JSON.parse(img.metadata_json).prompt : null,
-            model: img.metadata_json ? JSON.parse(img.metadata_json).model : null,
-            sampler: img.metadata_json ? JSON.parse(img.metadata_json).sampler : null,
             tags_json: undefined,
-            metadata_json: undefined,
           }));
 
           // Merge and sort by created_at

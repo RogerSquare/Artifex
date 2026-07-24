@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { getDb } = require('../db');
 const { requireAuth } = require('../lib/authMiddleware');
+const federationSync = require('../lib/federation-sync');
 
 const router = express.Router();
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
@@ -67,6 +68,30 @@ function getManifest() {
   };
 }
 
+// Full public field set. /public, /updates, and /image/:id must expose the
+// same shape — peers sync everything the viewer renders (incl. workflow_json,
+// video_metadata) plus filepath/preview_path for building direct media URLs.
+const PUBLIC_IMAGE_COLUMNS = `
+  i.id, i.title, i.original_name, i.width, i.height, i.format, i.media_type,
+  i.prompt, i.negative_prompt, i.model, i.sampler, i.steps, i.cfg_scale, i.seed,
+  i.workflow_json, i.prompt_json, i.video_metadata, i.duration, i.file_size,
+  i.file_hash, i.filepath, i.preview_path, i.caption, i.created_at
+`;
+
+function serializePublicImage(db, img) {
+  const tags = db.prepare(`
+    SELECT t.name, t.category FROM image_tags it JOIN tags t ON it.tag_id = t.id
+    WHERE it.image_id = ? ORDER BY t.category, t.name
+  `).all(img.id);
+
+  return {
+    ...img,
+    tags,
+    thumbnail_url: `/api/federation/image/${img.id}/thumbnail`,
+    detail_url: `/api/federation/image/${img.id}`,
+  };
+}
+
 // ─── Public Federation Endpoints ───
 
 // GET /api/federation/manifest — instance info and stats
@@ -88,28 +113,13 @@ router.get('/public', requireFederation, (req, res) => {
     const total = db.prepare("SELECT COUNT(*) as c FROM images WHERE visibility = 'public'").get();
 
     const images = db.prepare(`
-      SELECT i.id, i.title, i.original_name, i.width, i.height, i.format, i.media_type,
-        i.prompt, i.model, i.sampler, i.steps, i.cfg_scale, i.seed, i.caption,
-        i.created_at, u.username as uploaded_by
+      SELECT ${PUBLIC_IMAGE_COLUMNS}, u.username as uploaded_by
       FROM images i LEFT JOIN users u ON i.user_id = u.id
       WHERE i.visibility = 'public'
       ORDER BY i.created_at DESC LIMIT ? OFFSET ?
     `).all(limit, offset);
 
-    // Add tags and thumbnail URL for each image
-    const enriched = images.map(img => {
-      const tags = db.prepare(`
-        SELECT t.name, t.category FROM image_tags it JOIN tags t ON it.tag_id = t.id
-        WHERE it.image_id = ? ORDER BY t.category, t.name
-      `).all(img.id);
-
-      return {
-        ...img,
-        tags,
-        thumbnail_url: `/api/federation/image/${img.id}/thumbnail`,
-        detail_url: `/api/federation/image/${img.id}`,
-      };
-    });
+    const enriched = images.map(img => serializePublicImage(db, img));
 
     res.json({
       instance: { id: getSetting('instance_id'), name: getSetting('instance_name'), url: getSetting('instance_url') },
@@ -131,21 +141,15 @@ router.get('/updates', requireFederation, (req, res) => {
 
     const db = getDb();
 
-    // New or updated public images since timestamp
+    // New or updated public images since timestamp — same shape as /public
     const images = db.prepare(`
-      SELECT i.id, i.title, i.original_name, i.width, i.height, i.format, i.media_type,
-        i.prompt, i.model, i.sampler, i.caption, i.created_at, u.username as uploaded_by
+      SELECT ${PUBLIC_IMAGE_COLUMNS}, u.username as uploaded_by
       FROM images i LEFT JOIN users u ON i.user_id = u.id
       WHERE i.visibility = 'public' AND i.created_at > ?
       ORDER BY i.created_at DESC
     `).all(since);
 
-    const enriched = images.map(img => {
-      const tags = db.prepare(`
-        SELECT t.name, t.category FROM image_tags it JOIN tags t ON it.tag_id = t.id WHERE it.image_id = ?
-      `).all(img.id);
-      return { ...img, tags, thumbnail_url: `/api/federation/image/${img.id}/thumbnail` };
-    });
+    const enriched = images.map(img => serializePublicImage(db, img));
 
     // Deleted image IDs (from audit log)
     const deleted = db.prepare(`
@@ -233,7 +237,13 @@ router.put('/settings', requireAuth, (req, res) => {
     if (instance_name !== undefined) setSetting('instance_name', instance_name);
     if (instance_description !== undefined) setSetting('instance_description', instance_description);
     if (instance_url !== undefined) setSetting('instance_url', instance_url);
-    if (federation_enabled !== undefined) setSetting('federation_enabled', federation_enabled ? 'true' : 'false');
+    if (federation_enabled !== undefined) {
+      setSetting('federation_enabled', federation_enabled ? 'true' : 'false');
+      // Apply at runtime — previously the sync engine only started/stopped on
+      // process restart
+      if (federation_enabled) federationSync.start();
+      else federationSync.stop();
+    }
 
     const audit = require('../lib/audit');
     audit.fromReq(req, 'admin.federation_settings', 'instance', null, req.body);
@@ -361,8 +371,6 @@ router.get('/proxy/:peerId/:remoteId/full', async (req, res) => {
 
 // ─── Peer Management (Admin) ───
 
-const federationSync = require('../lib/federation-sync');
-
 // GET /api/federation/peers — list all peers
 router.get('/peers', requireAuth, (req, res) => {
   try {
@@ -473,13 +481,15 @@ router.get('/feed', (req, res) => {
       ORDER BY ri.remote_created_at DESC LIMIT @limit OFFSET @offset
     `).all({ ...params, limit, offset });
 
-    // Parse JSON fields
+    // Parse JSON fields; metadata object kept for Network-tab consumers
     const enriched = images.map(img => ({
       ...img,
       tags: img.tags_json ? JSON.parse(img.tags_json) : [],
-      metadata: img.metadata_json ? JSON.parse(img.metadata_json) : {},
+      metadata: {
+        prompt: img.prompt, model: img.model, sampler: img.sampler,
+        steps: img.steps, cfg_scale: img.cfg_scale, seed: img.seed,
+      },
       tags_json: undefined,
-      metadata_json: undefined,
     }));
 
     res.json({ images: enriched, total: total.c, limit, offset });

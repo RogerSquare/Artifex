@@ -12,8 +12,14 @@ export default function ImageCard({ image, onClick, selectable, selected, onTogg
   const videoRef = useRef(null)
 
   const isVideo = image.media_type === 'video'
-  const thumbSrc = image.thumbnail_path ? `${UPLOADS_URL}/${image.thumbnail_path}` : null
-  const videoSrc = `${UPLOADS_URL}/${image.preview_path || image.filepath}`
+  // Remote rows: locally cached thumbnail first (works when the peer is
+  // offline), direct peer thumb as fallback; previews/originals always direct
+  const thumbSrc = image.thumbnail_path
+    ? `${UPLOADS_URL}/${image.thumbnail_path}`
+    : (isRemote && image.thumb_url) || null
+  const videoSrc = isRemote
+    ? (image.preview_url || image.full_url)
+    : `${UPLOADS_URL}/${image.preview_path || image.filepath}`
   const aspectRatio = image.width && image.height ? image.width / image.height : 1
 
   // Continuous viewport tracking — play when visible, pause when not

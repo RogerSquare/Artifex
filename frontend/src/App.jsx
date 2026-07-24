@@ -199,10 +199,14 @@ function App() {
   }, [showUpload, selectedImage])
 
   const handleSelectImage = useCallback((image) => {
+    // Remote images already carry full synced metadata — refetching by id
+    // would collide with an unrelated local image's id
+    if (image.is_remote) { setSelectedImage(image); return }
     fetch(`${API_URL}/images/${image.id}`, { headers: authHeaders }).then(res => res.json()).then(full => setSelectedImage(full)).catch(() => setSelectedImage(image))
   }, [authHeaders])
 
   const handleNavigate = useCallback((image) => {
+    if (image.is_remote) { setSelectedImage(image); return }
     fetch(`${API_URL}/images/${image.id}`, { headers: authHeaders }).then(res => res.json()).then(full => setSelectedImage(full)).catch(() => setSelectedImage(image))
   }, [authHeaders])
 

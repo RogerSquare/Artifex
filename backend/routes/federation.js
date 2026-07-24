@@ -4,6 +4,7 @@ const fs = require('fs');
 const { getDb } = require('../db');
 const { requireAuth } = require('../lib/authMiddleware');
 const federationSync = require('../lib/federation-sync');
+const { remoteMediaUrls } = require('../lib/federation-urls');
 
 const router = express.Router();
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
@@ -42,6 +43,16 @@ function requireFederation(req, res, next) {
   }
   // Add version header to all federation responses
   res.setHeader('X-Artifex-Version', API_VERSION);
+  next();
+}
+
+/**
+ * Middleware: allow cross-origin reads. Only the public media/detail routes
+ * get this — peers' browsers load media directly from this instance.
+ * Deliberately NOT applied to /uploads/* which also serves private files.
+ */
+function allowCrossOrigin(req, res, next) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
   next();
 }
 
@@ -170,7 +181,7 @@ router.get('/updates', requireFederation, (req, res) => {
 });
 
 // GET /api/federation/image/:id — single image detail
-router.get('/image/:id', requireFederation, (req, res) => {
+router.get('/image/:id', requireFederation, allowCrossOrigin, (req, res) => {
   try {
     const db = getDb();
     const image = db.prepare(`
@@ -194,7 +205,7 @@ router.get('/image/:id', requireFederation, (req, res) => {
 });
 
 // GET /api/federation/image/:id/thumbnail — serve thumbnail for remote caching
-router.get('/image/:id/thumbnail', requireFederation, (req, res) => {
+router.get('/image/:id/thumbnail', requireFederation, allowCrossOrigin, (req, res) => {
   try {
     const db = getDb();
     const image = db.prepare("SELECT thumbnail_path, filepath FROM images WHERE id = ? AND visibility = 'public'").get(req.params.id);
@@ -206,6 +217,41 @@ router.get('/image/:id/thumbnail', requireFederation, (req, res) => {
 
     // Cache for 1 hour
     res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.sendFile(filePath);
+  } catch (error) {
+    res.status(500).json({ error: 'An internal error occurred' });
+  }
+});
+
+// GET /api/federation/media/:id/full — stream the original file (image or
+// video). express sendFile handles Range requests, so video seeking works.
+router.get('/media/:id/full', requireFederation, allowCrossOrigin, (req, res) => {
+  try {
+    const db = getDb();
+    const image = db.prepare("SELECT filepath FROM images WHERE id = ? AND visibility = 'public'").get(req.params.id);
+    if (!image || !image.filepath) return res.status(404).json({ error: 'Image not found' });
+
+    const filePath = path.join(UPLOADS_DIR, image.filepath);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+    res.setHeader('Cache-Control', 'public, max-age=7200');
+    res.sendFile(filePath);
+  } catch (error) {
+    res.status(500).json({ error: 'An internal error occurred' });
+  }
+});
+
+// GET /api/federation/media/:id/preview — video preview clip for grid autoplay
+router.get('/media/:id/preview', requireFederation, allowCrossOrigin, (req, res) => {
+  try {
+    const db = getDb();
+    const image = db.prepare("SELECT preview_path FROM images WHERE id = ? AND visibility = 'public'").get(req.params.id);
+    if (!image || !image.preview_path) return res.status(404).json({ error: 'Preview not found' });
+
+    const filePath = path.join(UPLOADS_DIR, image.preview_path);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+    res.setHeader('Cache-Control', 'public, max-age=7200');
     res.sendFile(filePath);
   } catch (error) {
     res.status(500).json({ error: 'An internal error occurred' });
@@ -481,15 +527,20 @@ router.get('/feed', (req, res) => {
       ORDER BY ri.remote_created_at DESC LIMIT @limit OFFSET @offset
     `).all({ ...params, limit, offset });
 
-    // Parse JSON fields; metadata object kept for Network-tab consumers
+    // Parse JSON fields, add direct-to-peer media URLs; local cached
+    // thumbnail_path stays as the offline fallback
     const enriched = images.map(img => ({
       ...img,
+      is_remote: true,
       tags: img.tags_json ? JSON.parse(img.tags_json) : [],
       metadata: {
         prompt: img.prompt, model: img.model, sampler: img.sampler,
         steps: img.steps, cfg_scale: img.cfg_scale, seed: img.seed,
       },
+      ...remoteMediaUrls(img.peer_url, img),
       tags_json: undefined,
+      filepath: undefined,
+      preview_path: undefined,
     }));
 
     res.json({ images: enriched, total: total.c, limit, offset });

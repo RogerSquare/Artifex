@@ -267,22 +267,31 @@ const initDb = () => {
 
     CREATE INDEX IF NOT EXISTS idx_remote_images_peer ON remote_images(peer_id);
     CREATE INDEX IF NOT EXISTS idx_remote_images_synced ON remote_images(synced_at);
-
-    CREATE TABLE IF NOT EXISTS hub_instances (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      instance_id TEXT UNIQUE,
-      name TEXT NOT NULL,
-      url TEXT NOT NULL UNIQUE,
-      description TEXT,
-      image_count INTEGER DEFAULT 0,
-      last_crawled_at TEXT,
-      status TEXT DEFAULT 'active',
-      error TEXT,
-      registered_at TEXT DEFAULT (datetime('now'))
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_hub_instances_status ON hub_instances(status);
   `);
+
+  // One-time federation rework migration: the hub/relay model is gone.
+  // Old installs carry hub-era artifacts (hub_instances table, hub_mode/hub_url
+  // settings) — wipe federated state so peers are re-added under the new model.
+  const hubEra =
+    db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'hub_instances'").get() ||
+    db.prepare("SELECT 1 AS x FROM instance_settings WHERE key IN ('hub_mode', 'hub_url')").get();
+  if (hubEra) {
+    const thumbsDir = path.join(__dirname, 'uploads', 'thumbnails');
+    try {
+      for (const f of fs.readdirSync(thumbsDir)) {
+        if (f.startsWith('remote_')) {
+          try { fs.unlinkSync(path.join(thumbsDir, f)); } catch (e) {}
+        }
+      }
+    } catch (e) {}
+    db.exec(`
+      DELETE FROM remote_images;
+      DELETE FROM peers;
+      DROP TABLE IF EXISTS hub_instances;
+      DELETE FROM instance_settings WHERE key IN ('hub_mode', 'hub_url');
+    `);
+    console.log('[Migration] Hub/relay removed — federation peers wiped; re-add peer URLs in Admin > Federation');
+  }
 
   // Generate instance ID on first boot
   const crypto = require('crypto');
@@ -294,7 +303,6 @@ const initDb = () => {
     db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('instance_description', '')").run();
     db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('instance_url', '')").run();
     db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('federation_enabled', 'false')").run();
-    db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('hub_mode', 'false')").run();
     console.log(`Instance ID generated: ${instanceId}`);
   }
 

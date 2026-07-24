@@ -219,7 +219,6 @@ router.get('/settings', requireAuth, (req, res) => {
       instance_description: getSetting('instance_description'),
       instance_url: getSetting('instance_url'),
       federation_enabled: getSetting('federation_enabled') === 'true',
-      hub_url: getSetting('hub_url') || '',
     });
   } catch (error) {
     res.status(500).json({ error: 'An internal error occurred' });
@@ -235,7 +234,6 @@ router.put('/settings', requireAuth, (req, res) => {
     if (instance_description !== undefined) setSetting('instance_description', instance_description);
     if (instance_url !== undefined) setSetting('instance_url', instance_url);
     if (federation_enabled !== undefined) setSetting('federation_enabled', federation_enabled ? 'true' : 'false');
-    if (req.body.hub_url !== undefined) setSetting('hub_url', req.body.hub_url);
 
     const audit = require('../lib/audit');
     audit.fromReq(req, 'admin.federation_settings', 'instance', null, req.body);

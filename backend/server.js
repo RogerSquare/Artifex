@@ -273,7 +273,6 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/collections', require('./routes/collections'));
 app.use('/api/tags', require('./routes/tags'));
 app.use('/api/federation', require('./routes/federation'));
-app.use('/api/hub', require('./routes/hub'));
 
 // Well-known federation manifest
 app.get('/.well-known/artifex.json', (req, res) => {
@@ -356,13 +355,6 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   if (fedEnabled?.value === 'true') {
     const federationSync = require('./lib/federation-sync');
     federationSync.start();
-  }
-
-  // Start hub push (if hub_url is configured)
-  const hubUrl = db.prepare("SELECT value FROM instance_settings WHERE key = 'hub_url'").get();
-  if (hubUrl?.value) {
-    const hubPush = require('./lib/hub-push');
-    hubPush.start();
   }
 });
 

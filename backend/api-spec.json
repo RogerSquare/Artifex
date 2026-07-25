@@ -266,7 +266,10 @@
       "post": { "tags": ["Federation"], "summary": "Add peer by URL (manifest-verified)", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Peer added" }, "400": { "description": "Invalid or self URL" }, "409": { "description": "Duplicate peer" } } }
     },
     "/federation/peers/health": { "get": { "tags": ["Federation"], "summary": "Live peer reachability probe (transient; does not alter sync status)", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Array of { id, online, latency_ms }" } } } },
-    "/federation/peers/{id}": { "delete": { "tags": ["Federation"], "summary": "Remove peer and cached content", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Removed" } } } },
+    "/federation/peers/{id}": {
+      "put": { "tags": ["Federation"], "summary": "Change peer mode: 'synced' (cache locally) or 'live' (pull on demand, nothing stored; switching purges cache)", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Updated peer" }, "400": { "description": "Invalid mode" }, "404": { "description": "Peer not found" } } },
+      "delete": { "tags": ["Federation"], "summary": "Remove peer and cached content", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Removed" } } }
+    },
     "/federation/peers/{id}/sync": { "post": { "tags": ["Federation"], "summary": "Sync one peer now", "security": [{ "bearerAuth": [] }], "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }], "responses": { "200": { "description": "Sync result" } } } },
     "/federation/sync": { "post": { "tags": ["Federation"], "summary": "Sync all peers now", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Sync results" } } } }
   }

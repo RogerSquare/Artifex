@@ -4,6 +4,7 @@ const fs = require('fs');
 const { getDb } = require('../db');
 const { requireAuth } = require('../lib/authMiddleware');
 const federationSync = require('../lib/federation-sync');
+const federationFeed = require('../lib/federation-feed');
 const { remoteMediaUrls } = require('../lib/federation-urls');
 
 const router = express.Router();
@@ -392,6 +393,51 @@ router.delete('/peers/:id', requireAuth, (req, res) => {
   }
 });
 
+// PUT /api/federation/peers/:id — change peer settings (currently: mode).
+// Switching to 'live' purges everything cached from that peer; switching back
+// to 'synced' kicks off a background sync so content reappears.
+router.put('/peers/:id', requireAuth, (req, res) => {
+  try {
+    const { mode } = req.body;
+    if (!['synced', 'live'].includes(mode)) {
+      return res.status(400).json({ error: "mode must be 'synced' or 'live'" });
+    }
+
+    const db = getDb();
+    const peer = db.prepare('SELECT * FROM peers WHERE id = ?').get(req.params.id);
+    if (!peer) return res.status(404).json({ error: 'Peer not found' });
+
+    if (mode === 'live' && peer.mode !== 'live') {
+      // Purge cached rows + thumbnail files — live peers store nothing locally.
+      // Also reset the sync cursor: a later switch back to 'synced' must do a
+      // full pull, not an incremental /updates that skips pre-purge content.
+      const cached = db.prepare(
+        'SELECT thumbnail_path FROM remote_images WHERE peer_id = ? AND thumbnail_path IS NOT NULL'
+      ).all(peer.id);
+      db.prepare('DELETE FROM remote_images WHERE peer_id = ?').run(peer.id);
+      db.prepare('UPDATE peers SET last_synced_at = NULL, image_count = 0 WHERE id = ?').run(peer.id);
+      for (const row of cached) {
+        try { fs.unlinkSync(path.join(UPLOADS_DIR, row.thumbnail_path)); } catch { /* already gone */ }
+      }
+    }
+
+    db.prepare('UPDATE peers SET mode = ? WHERE id = ?').run(mode, peer.id);
+    federationFeed.clearLiveCache(peer.id);
+
+    if (mode === 'synced' && peer.mode !== 'synced') {
+      // Refill the cache in the background; feed shows content as it lands
+      federationSync.syncPeer(peer.id).catch(() => {});
+    }
+
+    const audit = require('../lib/audit');
+    audit.fromReq(req, 'admin.peer_mode', 'peer', peer.id, { url: peer.url, mode });
+
+    res.json({ success: true, peer: db.prepare('SELECT * FROM peers WHERE id = ?').get(peer.id) });
+  } catch (error) {
+    res.status(500).json({ error: 'An internal error occurred' });
+  }
+});
+
 // POST /api/federation/peers/:id/sync — manually trigger sync for a peer
 router.post('/peers/:id/sync', requireAuth, async (req, res) => {
   try {
@@ -412,26 +458,45 @@ router.post('/sync', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/federation/feed — merged feed of remote images from all peers
-router.get('/feed', (req, res) => {
+// GET /api/federation/feed — merged feed of remote images from all peers.
+// Synced peers serve from the local cache; live-mode peers are fetched from
+// the peer at request time (absent while the peer is offline).
+router.get('/feed', async (req, res) => {
   try {
     const db = getDb();
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
     const peerId = req.query.peer ? parseInt(req.query.peer) : null;
 
-    let where = '';
-    const params = {};
-    if (peerId) { where = 'WHERE ri.peer_id = @peerId'; params.peerId = peerId; }
+    // A single live-mode peer pages straight through to the peer's API
+    if (peerId) {
+      const peer = db.prepare('SELECT * FROM peers WHERE id = ?').get(peerId);
+      if (!peer) return res.status(404).json({ error: 'Peer not found' });
+      if (peer.mode === 'live') {
+        try {
+          const { items, total } = await federationFeed.fetchLiveItems(peer, limit, offset);
+          return res.json({ images: items, total, limit, offset });
+        } catch {
+          return res.json({ images: [], total: 0, limit, offset, peer_offline: true });
+        }
+      }
+    }
 
-    const total = db.prepare(`SELECT COUNT(*) as c FROM remote_images ri ${where}`).get(params);
+    // Merged pagination across sources: first offset+limit rows of each
+    // source, merged, then sliced (same approach as /api/images/public)
+    const windowSize = offset + limit;
+    let where = "WHERE p.mode != 'live'";
+    const params = {};
+    if (peerId) { where += ' AND ri.peer_id = @peerId'; params.peerId = peerId; }
+
+    const total = db.prepare(`SELECT COUNT(*) as c FROM remote_images ri JOIN peers p ON ri.peer_id = p.id ${where}`).get(params);
 
     const images = db.prepare(`
       SELECT ri.*, p.name as peer_name, p.url as peer_url, p.instance_id as peer_instance_id
       FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
       ${where}
-      ORDER BY ri.remote_created_at DESC LIMIT @limit OFFSET @offset
-    `).all({ ...params, limit, offset });
+      ORDER BY ri.remote_created_at DESC LIMIT @windowSize
+    `).all({ ...params, windowSize });
 
     // Parse JSON fields, add direct-to-peer media URLs; local cached
     // thumbnail_path stays as the offline fallback
@@ -449,7 +514,13 @@ router.get('/feed', (req, res) => {
       preview_path: undefined,
     }));
 
-    res.json({ images: enriched, total: total.c, limit, offset });
+    const live = peerId ? { items: [], total: 0 } : await federationFeed.fetchAllLiveWindows(windowSize);
+
+    const merged = [...enriched, ...live.items]
+      .sort((a, b) => new Date(b.remote_created_at) - new Date(a.remote_created_at))
+      .slice(offset, offset + limit);
+
+    res.json({ images: merged, total: total.c + live.total, limit, offset });
   } catch (error) {
     res.status(500).json({ error: 'An internal error occurred' });
   }

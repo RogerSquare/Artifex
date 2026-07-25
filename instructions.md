@@ -98,6 +98,7 @@ On image upload:
 - Full metadata syncs into `remote_images` (prompts, workflow JSON, video metadata, file_hash); media bytes are never mirrored
 - Media loads directly from the source peer in the browser via CORS-enabled endpoints (`/api/federation/media/:id/full|preview`, `/api/federation/image/:id[/thumbnail]`); only `visibility='public'` rows are served
 - Remote images flagged with `is_remote: true` and carry `full_url`/`preview_url`/`thumb_url` in API responses
+- Per-peer `mode`: `synced` (default — metadata + thumbnails cached locally) or `live` (nothing stored; feeds fetch the peer's `/federation/public` at browse time with a 30s in-memory cache, items absent while peer offline). Toggle via `PUT /api/federation/peers/:id`; switching to live purges that peer's cache
 - No hub/relay: peers must be reachable from the viewer's browser (LAN or public URL, matching scheme)
 
 ## Docker

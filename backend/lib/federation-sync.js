@@ -88,6 +88,7 @@ async function syncPeer(peerId) {
   const db = getDb();
   const peer = db.prepare('SELECT * FROM peers WHERE id = ?').get(peerId);
   if (!peer || peer.status === 'blocked') return { synced: 0 };
+  if (peer.mode === 'live') return { synced: 0, live: true }; // live peers store nothing locally
 
   try {
     // Incremental sync — fetch updates since last sync
@@ -218,7 +219,7 @@ async function syncAll() {
   const enabled = db.prepare("SELECT value FROM instance_settings WHERE key = 'federation_enabled'").get();
   if (enabled?.value !== 'true') { syncing = false; return; }
 
-  const peers = db.prepare("SELECT id, name FROM peers WHERE status != 'blocked'").all();
+  const peers = db.prepare("SELECT id, name FROM peers WHERE status != 'blocked' AND mode != 'live'").all();
 
   for (const peer of peers) {
     await syncPeer(peer.id);

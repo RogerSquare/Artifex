@@ -11,6 +11,7 @@ const { applyMetadataTags } = require('../lib/tagger');
 const jobQueue = require('../lib/job-queue');
 const audit = require('../lib/audit');
 const { remoteMediaUrls } = require('../lib/federation-urls');
+const federationFeed = require('../lib/federation-feed');
 
 const router = express.Router();
 
@@ -231,7 +232,7 @@ router.get('/', optionalAuth, (req, res) => {
 });
 
 // GET /api/images/public — public gallery feed (local public + federated)
-router.get('/public', (req, res) => {
+router.get('/public', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
@@ -307,7 +308,38 @@ router.get('/public', (req, res) => {
         (!localHashSet.has(r.file_hash) && r.remote_row_id === minRowIdByHash.get(r.file_hash))
       ).map(r => ({ ...r, remote_row_id: undefined }));
 
-      const merged = [...result.images, ...dedupedRemote]
+      // Live-mode peers: fetched at request time, shaped like synced rows.
+      // Dedup by file_hash against local images and the synced remote set.
+      const live = await federationFeed.fetchAllLiveWindows(windowSize);
+      let liveItems = [];
+      let liveTotal = 0;
+      if (live.items.length > 0) {
+        const liveHashes = [...new Set(live.items.map(i => i.file_hash).filter(Boolean))];
+        let liveLocalHashSet = new Set();
+        if (liveHashes.length > 0) {
+          const lph = liveHashes.map(() => '?').join(',');
+          liveLocalHashSet = new Set(db.prepare(
+            `SELECT file_hash FROM images WHERE visibility = 'public' AND file_hash IN (${lph})`
+          ).all(...liveHashes).map(r => r.file_hash));
+        }
+        const seenHashes = new Set(dedupedRemote.map(r => r.file_hash).filter(Boolean));
+        for (const item of live.items) {
+          if (item.file_hash && (liveLocalHashSet.has(item.file_hash) || seenHashes.has(item.file_hash))) continue;
+          if (item.file_hash) seenHashes.add(item.file_hash);
+          liveItems.push({
+            ...item,
+            id: item.remote_id,
+            created_at: item.remote_created_at,
+            visibility: 'public',
+            is_favorited: false,
+            favorite_count: 0,
+            comment_count: 0,
+          });
+        }
+        liveTotal = live.total - (live.items.length - liveItems.length);
+      }
+
+      const merged = [...result.images, ...dedupedRemote, ...liveItems]
         .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
       // Total = local + remote rows that survive the same dedup rules
@@ -326,7 +358,7 @@ router.get('/public', (req, res) => {
       `).get();
 
       result.images = merged.slice(offset, offset + limit);
-      result.total = result.total + (survivingRemote?.c || 0);
+      result.total = result.total + (survivingRemote?.c || 0) + liveTotal;
       result.limit = limit;
       result.offset = offset;
       result.includes_federated = true;

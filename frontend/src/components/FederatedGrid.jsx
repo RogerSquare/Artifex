@@ -148,7 +148,7 @@ export default function FederatedGrid({ gridSize = 'comfortable', authHeaders = 
               const aspectRatio = image.width && image.height ? image.width / image.height : 1
               const thumbSrc = image.thumbnail_cached && image.thumbnail_path
                 ? `${UPLOADS_URL}/${image.thumbnail_path}`
-                : null
+                : image.thumb_url || null
 
               return (
                 <div

@@ -515,6 +515,14 @@ function FederationTab({ authHeaders }) {
     fetchData()
   }
 
+  const setPeerMode = async (id, mode) => {
+    await fetch(`${API_URL}/federation/peers/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ mode })
+    })
+    fetchData()
+  }
+
   const syncPeer = async (id) => {
     setSyncing(prev => ({ ...prev, [id]: true }))
     await fetch(`${API_URL}/federation/peers/${id}/sync`, { method: 'POST', headers: authHeaders })
@@ -625,12 +633,23 @@ function FederationTab({ authHeaders }) {
                     {live && !live.online && <span className="text-[10px] font-medium text-red">offline</span>}
                   </div>
                   <p className="text-[11px] text-text-muted/60 truncate">{peer.url}</p>
-                  {peer.error && <p className="text-[10px] text-red truncate">{peer.error}</p>}
-                  {peer.last_synced_at && <p className="text-[10px] text-text-muted/40">Last sync: {new Date(peer.last_synced_at).toLocaleString()}</p>}
+                  {peer.error && peer.mode !== 'live' && <p className="text-[10px] text-red truncate">{peer.error}</p>}
+                  {peer.mode === 'live'
+                    ? <p className="text-[10px] text-text-muted/40">Live — pulled from peer on demand, nothing cached</p>
+                    : peer.last_synced_at && <p className="text-[10px] text-text-muted/40">Last sync: {new Date(peer.last_synced_at).toLocaleString()}</p>}
                 </div>
+                <button
+                  onClick={() => setPeerMode(peer.id, peer.mode === 'live' ? 'synced' : 'live')}
+                  className={`shrink-0 px-2 py-1 rounded-md text-[11px] font-semibold transition-all ${peer.mode === 'live' ? 'bg-accent/15 text-accent' : 'bg-white/[0.06] text-text-muted hover:text-text'}`}
+                  title={peer.mode === 'live' ? 'Pulling live from peer — click to sync & cache locally' : 'Caching locally — click to pull live (removes cached copies)'}
+                >
+                  {peer.mode === 'live' ? 'Live' : 'Cached'}
+                </button>
+                {peer.mode !== 'live' && (
                 <button onClick={() => syncPeer(peer.id)} disabled={syncing[peer.id]} className="p-1.5 rounded-md text-text-muted hover:text-accent hover:bg-accent/10 transition-all" title="Sync now">
                   {syncing[peer.id] ? <CircleNotch className="w-4 h-4 animate-spin" /> : <ArrowClockwise className="w-4 h-4" />}
                 </button>
+                )}
                 <button onClick={() => removePeer(peer.id)} className="p-1.5 rounded-md text-text-muted hover:text-red hover:bg-red/10 transition-all" title="Remove">
                   <Trash className="w-4 h-4" />
                 </button>

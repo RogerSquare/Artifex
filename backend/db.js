@@ -248,6 +248,7 @@ const initDb = () => {
       name TEXT NOT NULL,
       url TEXT NOT NULL UNIQUE,
       status TEXT DEFAULT 'active',
+      mode TEXT DEFAULT 'synced',
       last_synced_at TEXT,
       image_count INTEGER DEFAULT 0,
       error TEXT,
@@ -292,6 +293,10 @@ const initDb = () => {
     CREATE INDEX IF NOT EXISTS idx_remote_images_peer ON remote_images(peer_id);
     CREATE INDEX IF NOT EXISTS idx_remote_images_synced ON remote_images(synced_at);
   `);
+
+  // Live-mode peers: mode='live' means nothing is cached locally — content is
+  // pulled from the peer's API at browse time (feat-federation-live-mode-001)
+  addColumnIfMissing('peers', 'mode', "TEXT DEFAULT 'synced'");
 
   // One-time federation rework migration: the hub/relay model is gone.
   // Old installs carry hub-era artifacts (hub_instances table, hub_mode/hub_url

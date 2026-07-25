@@ -298,6 +298,35 @@ const initDb = () => {
   // pulled from the peer's API at browse time (feat-federation-live-mode-001)
   addColumnIfMissing('peers', 'mode', "TEXT DEFAULT 'synced'");
 
+  // Collections can reference remote images (feat-remote-select-collect-001):
+  // image_id becomes nullable, remote_image_id points at the synced
+  // remote_images row (reference-in-place; entries cascade away with the
+  // peer). One-time table rebuild — must run after remote_images exists.
+  const ciHasRemote = db.prepare("SELECT 1 AS x FROM pragma_table_info('collection_images') WHERE name = 'remote_image_id'").get();
+  if (!ciHasRemote) {
+    db.exec(`
+      CREATE TABLE collection_images_v2 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        collection_id INTEGER NOT NULL,
+        image_id INTEGER,
+        remote_image_id INTEGER,
+        sort_order INTEGER DEFAULT 0,
+        added_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
+        FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE,
+        FOREIGN KEY (remote_image_id) REFERENCES remote_images(id) ON DELETE CASCADE,
+        CHECK ((image_id IS NULL) != (remote_image_id IS NULL)),
+        UNIQUE(collection_id, image_id),
+        UNIQUE(collection_id, remote_image_id)
+      );
+      INSERT INTO collection_images_v2 (id, collection_id, image_id, sort_order, added_at)
+        SELECT id, collection_id, image_id, sort_order, added_at FROM collection_images;
+      DROP TABLE collection_images;
+      ALTER TABLE collection_images_v2 RENAME TO collection_images;
+    `);
+    console.log('[Migration] collection_images rebuilt with remote_image_id support');
+  }
+
   // One-time federation rework migration: the hub/relay model is gone.
   // Old installs carry hub-era artifacts (hub_instances table, hub_mode/hub_url
   // settings) — wipe federated state so peers are re-added under the new model.

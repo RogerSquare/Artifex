@@ -503,6 +503,7 @@ router.get('/feed', async (req, res) => {
     const enriched = images.map(img => ({
       ...img,
       is_remote: true,
+      remote_row_id: img.id, // ri.* puts the remote_images row id in `id`
       tags: img.tags_json ? JSON.parse(img.tags_json) : [],
       metadata: {
         prompt: img.prompt, model: img.model, sampler: img.sampler,

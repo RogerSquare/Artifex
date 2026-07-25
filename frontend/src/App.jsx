@@ -94,18 +94,27 @@ function App() {
     setSelectMode(false); setSelectedIds([]); setShowDeleteConfirm(false)
   }, [])
 
+  // Selection keys: local images select by numeric id; remote images by
+  // "r<remote_row_id>" (their peer-side ids collide with local ids). Remote
+  // items support Compare and Add-to-Collection; owner-only bulk actions
+  // (delete, visibility) stay local.
+  const selKey = useCallback((img) => img.is_remote ? `r${img.remote_row_id}` : img.id, [])
+  const hasRemoteSelected = selectedIds.some(k => typeof k === 'string')
+
   const handleBulkVisibility = useCallback(async (visibility) => {
-    if (selectedIds.length === 0) return
+    const localIds = selectedIds.filter(k => typeof k === 'number')
+    if (localIds.length === 0) return
     try {
-      const res = await fetch(`${API_URL}/images/batch/visibility`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ ids: selectedIds, visibility }) })
+      const res = await fetch(`${API_URL}/images/batch/visibility`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ ids: localIds, visibility }) })
       if (res.ok) { exitSelectMode(); setRefreshKey(prev => prev + 1) }
     } catch { /* ignore */ }
   }, [selectedIds, authHeaders, exitSelectMode])
 
   const handleBulkDelete = useCallback(async () => {
-    if (selectedIds.length === 0) return
+    const localIds = selectedIds.filter(k => typeof k === 'number')
+    if (localIds.length === 0) return
     try {
-      const res = await fetch(`${API_URL}/images/batch`, { method: 'DELETE', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ ids: selectedIds }) })
+      const res = await fetch(`${API_URL}/images/batch`, { method: 'DELETE', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ ids: localIds }) })
       if (res.ok) { exitSelectMode(); setRefreshKey(prev => prev + 1) }
     } catch { /* ignore */ }
   }, [selectedIds, authHeaders, exitSelectMode])
@@ -127,7 +136,10 @@ function App() {
       const res = await fetch(`${API_URL}/collections/${collectionId}/images`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders },
-        body: JSON.stringify({ imageIds: selectedIds })
+        body: JSON.stringify({
+          imageIds: selectedIds.filter(k => typeof k === 'number'),
+          remoteImageIds: selectedIds.filter(k => typeof k === 'string').map(k => parseInt(k.slice(1))),
+        })
       })
       if (res.ok) {
         const data = await res.json()
@@ -229,7 +241,22 @@ function App() {
   const navigateToProfile = useCallback((username) => {
     setProfileUsername(username)
     setCurrentPage('profile')
+    try { window.history.pushState({}, '', `/profile/${encodeURIComponent(username)}`) } catch { /* ignore */ }
   }, [])
+
+  // Deep link: /profile/<username> — also the landing target when a peer's
+  // uploader link points at this instance
+  useEffect(() => {
+    const m = /^\/profile\/([^/]+)$/.exec(window.location.pathname)
+    if (m) { setProfileUsername(decodeURIComponent(m[1])); setCurrentPage('profile') }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, [])
+
+  useEffect(() => {
+    if (currentPage !== 'profile' && window.location.pathname.startsWith('/profile')) {
+      try { window.history.replaceState({}, '', '/') } catch { /* ignore */ }
+    }
+  }, [currentPage])
 
   useEffect(() => {
     if (selectedImage) document.body.style.overflow = 'hidden'
@@ -495,8 +522,8 @@ function App() {
       {selectMode && selectedIds.length > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
           <div className="flex items-center gap-3 bg-bg-elevated/90 backdrop-blur-xl rounded-full px-5 py-2.5 shadow-2xl shadow-black/50 border border-white/[0.08]">
-            <button onClick={() => { const ownedIds = galleryImages.filter(i => i.user_id === user?.id).map(i => i.id); setSelectedIds(selectedIds.length < ownedIds.length ? ownedIds : []) }} className="text-[13px] font-medium text-accent hover:text-accent-hover transition-colors">
-              {selectedIds.length < galleryImages.filter(i => i.user_id === user?.id).length ? 'Select All' : 'Deselect All'}
+            <button onClick={() => { const keys = galleryImages.filter(i => i.user_id === user?.id || (i.is_remote && i.remote_row_id)).map(selKey); setSelectedIds(selectedIds.length < keys.length ? keys : []) }} className="text-[13px] font-medium text-accent hover:text-accent-hover transition-colors">
+              {selectedIds.length < galleryImages.filter(i => i.user_id === user?.id || (i.is_remote && i.remote_row_id)).length ? 'Select All' : 'Deselect All'}
             </button>
             {galleryTab === 'library' && selectedCollection ? (
               <>
@@ -546,10 +573,11 @@ function App() {
                 </div>
                 {bulkAddedMsg && <span className="text-[12px] font-medium text-green whitespace-nowrap">{bulkAddedMsg}</span>}
                 <div className="w-px h-5 bg-white/[0.1]" />
-                <button onClick={() => handleBulkVisibility('public')} className="p-2 rounded-full text-text-secondary hover:text-green hover:bg-green/10 transition-all duration-200" title="Make public"><Globe className="w-[18px] h-[18px]" /></button>
-                <button onClick={() => handleBulkVisibility('private')} className="p-2 rounded-full text-text-secondary hover:text-text hover:bg-white/[0.06] transition-all duration-200" title="Make private"><Lock className="w-[18px] h-[18px]" /></button>
+                {/* Owner-only actions — unavailable while remote items are selected */}
+                <button onClick={() => handleBulkVisibility('public')} disabled={hasRemoteSelected} className="p-2 rounded-full text-text-secondary hover:text-green hover:bg-green/10 transition-all duration-200 disabled:opacity-30 disabled:pointer-events-none" title={hasRemoteSelected ? 'Not available for network images' : 'Make public'}><Globe className="w-[18px] h-[18px]" /></button>
+                <button onClick={() => handleBulkVisibility('private')} disabled={hasRemoteSelected} className="p-2 rounded-full text-text-secondary hover:text-text hover:bg-white/[0.06] transition-all duration-200 disabled:opacity-30 disabled:pointer-events-none" title={hasRemoteSelected ? 'Not available for network images' : 'Make private'}><Lock className="w-[18px] h-[18px]" /></button>
                 {!showDeleteConfirm ? (
-                  <button onClick={() => setShowDeleteConfirm(true)} className="p-2 rounded-full text-text-secondary hover:text-red hover:bg-red/10 transition-all duration-200" title="Delete"><Trash className="w-[18px] h-[18px]" /></button>
+                  <button onClick={() => setShowDeleteConfirm(true)} disabled={hasRemoteSelected} className="p-2 rounded-full text-text-secondary hover:text-red hover:bg-red/10 transition-all duration-200 disabled:opacity-30 disabled:pointer-events-none" title={hasRemoteSelected ? 'Not available for network images' : 'Delete'}><Trash className="w-[18px] h-[18px]" /></button>
                 ) : (
                   <>
                     <button onClick={handleBulkDelete} className="px-3 py-1.5 bg-red text-white rounded-full text-[12px] font-semibold hover:bg-red/80 transition-colors">Delete {selectedIds.length}</button>
@@ -595,8 +623,8 @@ function App() {
       )}
       {showCompare && selectedIds.length === 2 && (
         <CompareView
-          imageA={galleryImages.find(i => i.id === selectedIds[0])}
-          imageB={galleryImages.find(i => i.id === selectedIds[1])}
+          imageA={galleryImages.find(i => selKey(i) === selectedIds[0])}
+          imageB={galleryImages.find(i => selKey(i) === selectedIds[1])}
           onClose={() => setShowCompare(false)}
         />
       )}

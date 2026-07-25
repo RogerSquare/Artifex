@@ -298,8 +298,14 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
               ].filter(Boolean).map(([label, value, isProfile]) => (
                 <div key={label} className="flex items-center justify-between px-3.5 py-2.5">
                   <span className="text-[13px] text-text-secondary">{label}</span>
-                  {isProfile && onViewProfile ? (
-                    <button onClick={() => onViewProfile(value)} className="text-[13px] text-accent hover:underline truncate ml-3 max-w-[160px] cursor-pointer">{value}</button>
+                  {isProfile && (isRemote ? image.peer_url : onViewProfile) ? (
+                    <button
+                      onClick={() => isRemote
+                        ? window.open(`${image.peer_url.replace(/\/+$/, '')}/profile/${encodeURIComponent(value)}`, '_blank', 'noopener')
+                        : onViewProfile(value)}
+                      className="text-[13px] text-accent hover:underline truncate ml-3 max-w-[160px] cursor-pointer"
+                      title={isRemote ? `View profile on ${image.peer_name || 'peer instance'}` : undefined}
+                    >{value}</button>
                   ) : (
                     <span className="text-[13px] text-text truncate ml-3 max-w-[160px]">{value}</span>
                   )}

@@ -28,6 +28,7 @@ function shapeLiveItem(peer, img) {
   return {
     peer_id: peer.id,
     remote_id: img.id,
+    remote_row_id: null, // live items have no local row to reference (e.g. for collections)
     peer_name: peer.name,
     peer_url: peer.url,
     peer_instance_id: peer.instance_id,

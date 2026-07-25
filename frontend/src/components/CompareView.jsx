@@ -20,8 +20,9 @@ export default function CompareView({ imageA, imageB, onClose }) {
 
   const a = swapped ? imageB : imageA
   const b = swapped ? imageA : imageB
-  const srcA = `${UPLOADS_URL}/${a.filepath}`
-  const srcB = `${UPLOADS_URL}/${b.filepath}`
+  // Remote images load full-res directly from their peer
+  const srcA = a.is_remote ? a.full_url : `${UPLOADS_URL}/${a.filepath}`
+  const srcB = b.is_remote ? b.full_url : `${UPLOADS_URL}/${b.filepath}`
 
   // Keyboard
   useEffect(() => {

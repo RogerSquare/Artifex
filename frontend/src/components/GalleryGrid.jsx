@@ -249,7 +249,7 @@ export default function GalleryGrid({ filters, galleryTab = 'all', gridSize = 'c
                 image={image}
                 onClick={onSelectImage}
                 selectable={selectable}
-                selected={selectedIds.includes(image.id)}
+                selected={selectedIds.includes(image.is_remote ? `r${image.remote_row_id}` : image.id)}
                 onToggleSelect={onToggleSelect}
                 onToggleFavorite={handleToggleFavorite}
                 onContextMenu={onContextMenu}

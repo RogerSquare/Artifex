@@ -315,10 +315,12 @@ async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
       minRowIdByHash.set(row.file_hash, row.min_id);
     }
   }
+  // remote_row_id (the local remote_images row id) stays in the payload —
+  // it's the stable reference collections use for remote items
   const dedupedRemote = enriched.filter(r =>
     !r.file_hash ||
     (!localHashSet.has(r.file_hash) && r.remote_row_id === minRowIdByHash.get(r.file_hash))
-  ).map(r => ({ ...r, remote_row_id: undefined }));
+  );
 
   // Live-mode peers: fetched at request time, shaped like synced rows.
   // Dedup by file_hash against local images and the synced remote set.

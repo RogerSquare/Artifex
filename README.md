@@ -47,6 +47,25 @@ The application supports multi-user authentication with role-based access, image
 - **Rate limiting**: Built-in rate limiting on public-facing endpoints
 - **API documentation**: Swagger UI available at `/api-docs`
 
+## Federation
+
+Artifex instances federate directly with each other — no central registry, no relay, no account on the other side.
+
+### How it works
+
+- **Simple peer list** — an admin adds another instance by URL in *Admin → Federation*. The peer is verified through its `/api/federation/manifest` before it's saved (bare `ip:port` works as long as the instance answers).
+- **Full-metadata sync** — a background engine (30-minute interval, plus manual sync) pulls each peer's public catalog into a local cache: prompts, negative prompts, workflow JSON, sampler/steps/CFG/seed, video metadata, and file hashes. Browsing and search keep working while a peer is offline. Thumbnails are cached to disk, and failed thumbnail downloads self-heal on later sync cycles.
+- **Direct media loading** — full-resolution images and videos are never mirrored or proxied. The viewer's browser streams them straight from the source peer's CORS-enabled endpoints (`/api/federation/media/:id/full`, `/media/:id/preview`, `/image/:id/thumbnail`). Only `visibility: public` items are ever served to peers.
+- **Cached vs Live, per peer** — each peer runs in *Cached* mode (default: metadata + thumbnails stored locally) or *Live* mode (nothing stored: feeds query the peer at browse time with a short cache, and its items simply drop out of feeds while it's offline). Switching to Live purges everything cached from that peer; switching back triggers a fresh full sync.
+- **Live status** — peer online/offline dots update within ~10 seconds via a lightweight health poll, independent of sync state.
+- **One merged library** — peer content shows in the Network tab and interleaves into the Public and All tabs, deduplicated against local copies by file hash (a local copy always wins). Remote images support compare, selection, and saving to collections (by reference — Cached peers only), and uploader names link to the profile on the source instance.
+
+### Requirements and limits
+
+- Peers must be reachable from the **viewer's browser** (LAN or public URL) since media loads directly; use matching http/https schemes to avoid mixed-content blocking. Set `PUBLIC_URL` so peers and their browsers know how to reach you.
+- Federation endpoints are public-read by design: only public images are exposed, no peer-to-peer credentials are exchanged, and a dedicated rate limit (300 req/min/IP) covers the media-heavy direct-load traffic.
+- Toggling federation on/off in the admin panel applies at runtime — no restart needed.
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -106,6 +125,9 @@ Key environment variables:
 | `PORT` | Backend server port | 3002 |
 | `FFMPEG_PATH` | Path to FFmpeg binary | System PATH |
 | `FFPROBE_PATH` | Path to FFprobe binary | System PATH |
+| `PUBLIC_URL` | This instance's URL as peers and their browsers reach it (seeds instance settings on first boot; admin UI owns it after) | — |
+| `INSTANCE_NAME` | Display name shown to federation peers (first boot only) | Artifex Gallery |
+| `FEDERATION_ENABLED` | Enable federation on first boot (toggleable later in the admin UI) | false (`true` in docker-compose) |
 
 ### Running
 
@@ -148,10 +170,12 @@ backend/
     auth.js           # Login, registration, token refresh
     admin.js          # User management, system settings
     tags.js           # Tag management and search
-    collections.js    # Collection CRUD
-    federation.js     # Peer sync endpoints
-    hub.js            # Discovery hub
+    collections.js    # Collection CRUD (local + remote references)
+    federation.js     # Peer management, public federation API, feeds
   lib/
+    federation-sync.js # Pull-sync engine (metadata + thumbnail cache)
+    federation-feed.js # Live-mode peer feed assembly
+    federation-urls.js # Direct browser-to-peer media URLs
     jobQueue.js       # Background ML processing queue
     authMiddleware.js # JWT verification middleware
     visionClient.js   # Python ML server communication

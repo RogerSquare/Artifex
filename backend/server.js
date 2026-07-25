@@ -366,6 +366,11 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     const federationSync = require('./lib/federation-sync');
     federationSync.start();
   }
+
+  // One-time embedded-creation-date backfill (async, guarded internally)
+  setTimeout(() => {
+    require('./lib/creation-backfill').run().catch(err => console.error('[Backfill] failed:', err.message));
+  }, 5000);
 });
 
 // ─── Graceful Shutdown ───

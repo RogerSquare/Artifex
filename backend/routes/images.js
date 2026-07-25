@@ -142,7 +142,9 @@ router.post('/upload', requireAuth, upload.array('images', 50), async (req, res)
         duration: duration || null,
         video_metadata: meta.video_metadata ? JSON.stringify(meta.video_metadata) : null,
         file_hash: fileHash,
-        original_created_at: parseClientTimestamp(lastModified[fileIdx]),
+        // Embedded metadata (ffprobe creation_time / PNG Creation Time) beats
+        // the client-supplied file timestamp
+        original_created_at: meta.original_created_at || parseClientTimestamp(lastModified[fileIdx]),
       };
 
       const info = insertStmt.run(record);
@@ -982,7 +984,7 @@ router.post('/import', async (req, res) => {
         seed: meta.seed,
         prompt_json: meta.prompt_json,
         workflow_json: meta.workflow_json,
-        original_created_at: originalCreatedAt,
+        original_created_at: meta.original_created_at || originalCreatedAt,
       };
 
       insertStmt.run(record);

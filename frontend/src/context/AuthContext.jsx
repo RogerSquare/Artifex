@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react'
 import { API_URL } from '../config'
 
 const AuthContext = createContext(null)
@@ -64,8 +64,10 @@ export function AuthProvider({ children }) {
     setUser(null)
   }, [])
 
-  // Helper to get auth headers for API calls
-  const authHeaders = token ? { Authorization: `Bearer ${token}` } : {}
+  // Helper to get auth headers for API calls — memoized so consumers that use
+  // it as an effect dependency (data fetchers, polling hooks) don't re-run on
+  // every provider render
+  const authHeaders = useMemo(() => token ? { Authorization: `Bearer ${token}` } : {}, [token])
 
   return (
     <AuthContext.Provider value={{ user, token, authHeaders, loading, login, register, logout }}>

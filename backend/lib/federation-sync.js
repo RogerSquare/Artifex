@@ -11,9 +11,11 @@ const fs = require('fs');
 
 const THUMBNAILS_DIR = path.join(__dirname, '..', 'uploads', 'thumbnails');
 const DEFAULT_SYNC_INTERVAL = 30 * 60 * 1000; // 30 minutes
+const SYNC_ALL_COOLDOWN_MS = 10 * 1000;
 
 let syncTimer = null;
 let syncing = false;
+let lastSyncAllAt = 0;
 
 /**
  * Fetch JSON from a URL.
@@ -213,6 +215,11 @@ async function syncPeer(peerId) {
  */
 async function syncAll() {
   if (syncing) return;
+  // Cooldown: rapid repeat triggers (e.g. mashing "Sync All") must not hammer
+  // peers — their federation limiters will 429 us. Per-peer manual sync is
+  // intentionally not throttled.
+  if (Date.now() - lastSyncAllAt < SYNC_ALL_COOLDOWN_MS) return;
+  lastSyncAllAt = Date.now();
   syncing = true;
 
   const db = getDb();

@@ -472,15 +472,25 @@ function FederationTab({ authHeaders }) {
   const [error, setError] = useState('')
   const peerHealth = usePeerHealth(authHeaders)
 
+  const [loadError, setLoadError] = useState('')
+
   const fetchData = useCallback(async () => {
     try {
       const [settingsRes, peersRes] = await Promise.all([
         fetch(`${API_URL}/federation/settings`, { headers: authHeaders }),
         fetch(`${API_URL}/federation/peers`, { headers: authHeaders }),
       ])
-      if (settingsRes.ok) setSettings(await settingsRes.json())
+      if (settingsRes.ok) {
+        setSettings(await settingsRes.json())
+        setLoadError('')
+      } else {
+        const err = await settingsRes.json().catch(() => ({}))
+        setLoadError(err.error || `Failed to load federation settings (HTTP ${settingsRes.status})`)
+      }
       if (peersRes.ok) { const d = await peersRes.json(); setPeers(d.peers || []) }
-    } catch {}
+    } catch {
+      setLoadError('Failed to reach the server')
+    }
   }, [authHeaders])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard data-fetch on mount
@@ -537,7 +547,19 @@ function FederationTab({ authHeaders }) {
     fetchData()
   }
 
-  if (!settings) return <div className="text-center py-8 text-text-muted">Loading...</div>
+  if (!settings) {
+    if (loadError) {
+      return (
+        <div className="text-center py-8">
+          <p className="text-[13px] text-red mb-3">{loadError}</p>
+          <button onClick={fetchData} className="px-4 py-2 bg-accent text-white rounded-lg text-[12px] font-semibold hover:bg-accent-hover transition-all">
+            Retry
+          </button>
+        </div>
+      )
+    }
+    return <div className="text-center py-8 text-text-muted">Loading...</div>
+  }
 
   return (
     <div className="space-y-6">

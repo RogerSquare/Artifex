@@ -83,20 +83,24 @@ const uploadLimiter = rateLimit({
   skip: () => process.env.NODE_ENV === 'test',
 });
 
-// General API: 200 requests per minute per IP
+// General API: 200 requests per minute per IP. Federation routes are exempt
+// here — they carry direct-load media traffic and have their own limiter.
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Rate limit exceeded. Please slow down.' },
-  skip: () => process.env.NODE_ENV === 'test',
+  skip: (req) => process.env.NODE_ENV === 'test' || req.path.startsWith('/federation'),
 });
 
-// Federation: 30 requests per minute per IP
+// Federation: 300 requests per minute per IP. Under the direct-load model a
+// browser legitimately fetches dozens of remote thumbnails/previews per page
+// plus the 10s peer-health poll — the old 30/min starved the admin UI and
+// peers into 429s.
 const federationLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 30,
+  max: 300,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Federation rate limit exceeded.' },

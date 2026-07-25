@@ -5,15 +5,24 @@ import { UPLOADS_URL } from '../config'
 export default function ImageCard({ image, onClick, selectable, selected, onToggleSelect, onToggleFavorite, onContextMenu, currentUserId }) {
   const isRemote = !!image.is_remote;
   const isOwner = !isRemote && (!currentUserId || image.user_id === currentUserId);
-  const canSelect = selectable && isOwner;
+  // Remote items with a synced local row are selectable (compare, collect);
+  // live-mode items (no remote_row_id) and others' local images are not
+  const canSelect = selectable && (isOwner || (isRemote && !!image.remote_row_id));
+  const selectKey = isRemote ? `r${image.remote_row_id}` : image.id;
   const [loaded, setLoaded] = useState(false)
   const [inViewport, setInViewport] = useState(false)
   const ref = useRef(null)
   const videoRef = useRef(null)
 
   const isVideo = image.media_type === 'video'
-  const thumbSrc = image.thumbnail_path ? `${UPLOADS_URL}/${image.thumbnail_path}` : null
-  const videoSrc = `${UPLOADS_URL}/${image.preview_path || image.filepath}`
+  // Remote rows: locally cached thumbnail first (works when the peer is
+  // offline), direct peer thumb as fallback; previews/originals always direct
+  const thumbSrc = image.thumbnail_path
+    ? `${UPLOADS_URL}/${image.thumbnail_path}`
+    : (isRemote && image.thumb_url) || null
+  const videoSrc = isRemote
+    ? (image.preview_url || image.full_url)
+    : `${UPLOADS_URL}/${image.preview_path || image.filepath}`
   const aspectRatio = image.width && image.height ? image.width / image.height : 1
 
   // Continuous viewport tracking — play when visible, pause when not
@@ -42,11 +51,11 @@ export default function ImageCard({ image, onClick, selectable, selected, onTogg
   return (
     <div
       ref={ref}
-      onClick={canSelect ? () => onToggleSelect?.(image.id) : selectable && !isOwner ? undefined : () => onClick(image)}
+      onClick={canSelect ? () => onToggleSelect?.(selectKey) : selectable ? undefined : () => onClick(image)}
       onContextMenu={(e) => { if (onContextMenu) { e.preventDefault(); onContextMenu(e, image) } }}
       className={`group relative rounded-2xl overflow-hidden transition-all duration-300 ease-out
-        ${selectable && !isOwner ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-        ${selected ? 'ring-2 ring-accent ring-offset-2 ring-offset-bg scale-[0.98]' : selectable && !isOwner ? '' : 'hover:scale-[1.02] hover:shadow-2xl hover:shadow-black/40'}`}
+        ${selectable && !canSelect ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+        ${selected ? 'ring-2 ring-accent ring-offset-2 ring-offset-bg scale-[0.98]' : selectable && !canSelect ? '' : 'hover:scale-[1.02] hover:shadow-2xl hover:shadow-black/40'}`}
     >
       <div className="relative" style={{ paddingBottom: `${(1 / aspectRatio) * 100}%` }}>
         {/* Video: show poster thumbnail, overlay <video> when in viewport */}

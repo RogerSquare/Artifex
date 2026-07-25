@@ -83,20 +83,24 @@ const uploadLimiter = rateLimit({
   skip: () => process.env.NODE_ENV === 'test',
 });
 
-// General API: 200 requests per minute per IP
+// General API: 200 requests per minute per IP. Federation routes are exempt
+// here — they carry direct-load media traffic and have their own limiter.
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 200,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Rate limit exceeded. Please slow down.' },
-  skip: () => process.env.NODE_ENV === 'test',
+  skip: (req) => process.env.NODE_ENV === 'test' || req.path.startsWith('/federation'),
 });
 
-// Federation: 30 requests per minute per IP
+// Federation: 300 requests per minute per IP. Under the direct-load model a
+// browser legitimately fetches dozens of remote thumbnails/previews per page
+// plus the 10s peer-health poll — the old 30/min starved the admin UI and
+// peers into 429s.
 const federationLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 30,
+  max: 300,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Federation rate limit exceeded.' },
@@ -157,14 +161,20 @@ app.get('/api/health', (req, res) => {
       walk(UPLOADS_DIR);
     } catch (e) {}
 
-    // Disk free space
+    // Disk free space (wmic on Windows, df elsewhere — incl. Docker/Linux)
     let diskFree = null;
     try {
       const { execSync } = require('child_process');
-      const drive = __dirname.charAt(0);
-      const out = execSync(`wmic logicaldisk where "DeviceID='${drive}:'" get FreeSpace /value`, { encoding: 'utf8' });
-      const match = out.match(/FreeSpace=(\d+)/);
-      if (match) diskFree = parseInt(match[1]);
+      if (process.platform === 'win32') {
+        const drive = __dirname.charAt(0);
+        const out = execSync(`wmic logicaldisk where "DeviceID='${drive}:'" get FreeSpace /value`, { encoding: 'utf8' });
+        const match = out.match(/FreeSpace=(\d+)/);
+        if (match) diskFree = parseInt(match[1]);
+      } else {
+        const out = execSync(`df -kP "${__dirname}"`, { encoding: 'utf8' });
+        const cols = out.trim().split('\n').pop().split(/\s+/);
+        if (cols[3]) diskFree = parseInt(cols[3]) * 1024;
+      }
     } catch (e) {}
 
     // Job queue
@@ -273,7 +283,6 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/collections', require('./routes/collections'));
 app.use('/api/tags', require('./routes/tags'));
 app.use('/api/federation', require('./routes/federation'));
-app.use('/api/hub', require('./routes/hub'));
 
 // Well-known federation manifest
 app.get('/.well-known/artifex.json', (req, res) => {
@@ -356,13 +365,6 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   if (fedEnabled?.value === 'true') {
     const federationSync = require('./lib/federation-sync');
     federationSync.start();
-  }
-
-  // Start hub push (if hub_url is configured)
-  const hubUrl = db.prepare("SELECT value FROM instance_settings WHERE key = 'hub_url'").get();
-  if (hubUrl?.value) {
-    const hubPush = require('./lib/hub-push');
-    hubPush.start();
   }
 });
 

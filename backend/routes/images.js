@@ -10,6 +10,8 @@ const { requireAuth, optionalAuth } = require('../lib/authMiddleware');
 const { applyMetadataTags } = require('../lib/tagger');
 const jobQueue = require('../lib/job-queue');
 const audit = require('../lib/audit');
+const { remoteMediaUrls } = require('../lib/federation-urls');
+const federationFeed = require('../lib/federation-feed');
 
 const router = express.Router();
 
@@ -200,7 +202,7 @@ function buildImageQuery(req, extraConditions = [], extraParams = {}, extraJoins
   const total = db.prepare(`SELECT COUNT(*) as count FROM images i ${extraJoins} ${where}`).get(params);
   const images = db.prepare(
     `SELECT i.id, i.filename, i.original_name, i.filepath, i.thumbnail_path, i.title, i.width, i.height, i.file_size, i.format,
-      i.has_metadata, i.prompt, i.model, i.sampler, i.steps, i.cfg_scale, i.seed, i.created_at, i.user_id, i.visibility, i.media_type, i.duration, i.preview_path,
+      i.has_metadata, i.prompt, i.model, i.sampler, i.steps, i.cfg_scale, i.seed, i.created_at, i.user_id, i.visibility, i.media_type, i.duration, i.preview_path, i.file_hash,
       u.username as uploaded_by ${favSelect} ${countSelect}
      FROM images i LEFT JOIN users u ON i.user_id = u.id ${favJoin} ${extraJoins} ${where} ORDER BY ${customOrder || `i.created_at ${sort}`} LIMIT @limit OFFSET @offset`
   ).all({ ...params, limit, offset });
@@ -208,8 +210,10 @@ function buildImageQuery(req, extraConditions = [], extraParams = {}, extraJoins
   return { total: total.count, limit, offset, images };
 }
 
-// GET /api/images — all images visible to the current user (public + own private)
-router.get('/', optionalAuth, (req, res) => {
+// GET /api/images — all images visible to the current user (public + own
+// private), plus federated peer content: the All tab is the user's entire
+// accessible library
+router.get('/', optionalAuth, async (req, res) => {
   try {
     const conditions = [];
     const params = {};
@@ -223,65 +227,175 @@ router.get('/', optionalAuth, (req, res) => {
       conditions.push("i.visibility = 'public'");
     }
 
-    res.json(buildImageQuery(req, conditions, params));
+    if (!federationActive(req)) {
+      return res.json(buildImageQuery(req, conditions, params));
+    }
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset = parseInt(req.query.offset) || 0;
+    try {
+      res.json(await buildFederatedFeed(req, conditions, params, { limit, offset }));
+    } catch (e) {
+      // Federation failure degrades to local-only
+      res.json(buildImageQuery(req, conditions, params));
+    }
   } catch (error) {
     const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });
   }
 });
 
+// True when this request should merge federated content into the feed
+function federationActive(req) {
+  if (req.query.include_federated === 'false') return false;
+  const db = getDb();
+  const fedEnabled = db.prepare("SELECT value FROM instance_settings WHERE key = 'federation_enabled'").get();
+  return fedEnabled?.value === 'true';
+}
+
+// Merge federated content (synced cache + live-mode peers) into a local
+// query's results. `conditions`/`params` describe the LOCAL slice (public-only
+// for the Public tab; public + own for the All tab) — remote items are public
+// by definition. Used by GET / and GET /public.
+async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
+  const db = getDb();
+  // Merged pagination: page N of a merged sort needs the first offset+limit
+  // rows of EACH source, merged, then sliced — applying the same offset to
+  // both sources independently shifts page boundaries.
+  const windowSize = offset + limit;
+  const windowReq = { query: { ...req.query, limit: windowSize, offset: 0 }, user: req.user };
+  const result = buildImageQuery(windowReq, conditions, params);
+
+  // media_type is the one filter remote rows can honor cheaply
+  const mediaType = ['image', 'video'].includes(req.query.media_type) ? req.query.media_type : null;
+  const mtSql = mediaType ? 'AND ri.media_type = @mediaType' : '';
+
+  const remoteImages = db.prepare(`
+    SELECT ri.remote_id as id, ri.remote_id, ri.id as remote_row_id,
+      ri.title, ri.width, ri.height, ri.format, ri.media_type,
+      ri.caption, ri.remote_created_at as created_at, ri.uploaded_by,
+      ri.thumbnail_path, ri.thumbnail_cached, ri.tags_json, ri.preview_path,
+      ri.prompt, ri.negative_prompt, ri.model, ri.sampler, ri.steps,
+      ri.cfg_scale, ri.seed, ri.workflow_json, ri.prompt_json,
+      ri.video_metadata, ri.duration, ri.file_size, ri.file_hash,
+      ri.peer_id, p.name as peer_name, p.url as peer_url
+    FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
+    WHERE p.status = 'active' ${mtSql}
+    ORDER BY ri.remote_created_at DESC LIMIT @windowSize
+  `).all(mediaType ? { mediaType, windowSize } : { windowSize });
+
+  const enriched = remoteImages.map(img => ({
+    ...img,
+    is_remote: true,
+    visibility: 'public',
+    is_favorited: false,
+    favorite_count: 0,
+    comment_count: 0,
+    tags: img.tags_json ? JSON.parse(img.tags_json) : [],
+    ...remoteMediaUrls(img.peer_url, img),
+    tags_json: undefined,
+    preview_path: undefined,
+  }));
+
+  // Dedup by file_hash: a local copy always wins over a remote one, and
+  // among remote copies the earliest-synced row wins. The rules match the
+  // total-count query below so pages and totals stay consistent.
+  const hashes = [...new Set(enriched.map(r => r.file_hash).filter(Boolean))];
+  let localHashSet = new Set();
+  const minRowIdByHash = new Map();
+  if (hashes.length > 0) {
+    const ph = hashes.map(() => '?').join(',');
+    localHashSet = new Set(db.prepare(
+      `SELECT file_hash FROM images WHERE visibility = 'public' AND file_hash IN (${ph})`
+    ).all(...hashes).map(r => r.file_hash));
+    for (const row of db.prepare(`
+      SELECT ri.file_hash, MIN(ri.id) as min_id
+      FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
+      WHERE p.status = 'active' AND ri.file_hash IN (${ph})
+      GROUP BY ri.file_hash
+    `).all(...hashes)) {
+      minRowIdByHash.set(row.file_hash, row.min_id);
+    }
+  }
+  // remote_row_id (the local remote_images row id) stays in the payload —
+  // it's the stable reference collections use for remote items
+  const dedupedRemote = enriched.filter(r =>
+    !r.file_hash ||
+    (!localHashSet.has(r.file_hash) && r.remote_row_id === minRowIdByHash.get(r.file_hash))
+  );
+
+  // Live-mode peers: fetched at request time, shaped like synced rows.
+  // Dedup by file_hash against local images and the synced remote set.
+  const live = await federationFeed.fetchAllLiveWindows(windowSize);
+  let liveItems = [];
+  let liveTotal = 0;
+  const liveCandidates = mediaType ? live.items.filter(i => i.media_type === mediaType) : live.items;
+  if (liveCandidates.length > 0) {
+    const liveHashes = [...new Set(liveCandidates.map(i => i.file_hash).filter(Boolean))];
+    let liveLocalHashSet = new Set();
+    if (liveHashes.length > 0) {
+      const lph = liveHashes.map(() => '?').join(',');
+      liveLocalHashSet = new Set(db.prepare(
+        `SELECT file_hash FROM images WHERE visibility = 'public' AND file_hash IN (${lph})`
+      ).all(...liveHashes).map(r => r.file_hash));
+    }
+    const seenHashes = new Set(dedupedRemote.map(r => r.file_hash).filter(Boolean));
+    for (const item of liveCandidates) {
+      if (item.file_hash && (liveLocalHashSet.has(item.file_hash) || seenHashes.has(item.file_hash))) continue;
+      if (item.file_hash) seenHashes.add(item.file_hash);
+      liveItems.push({
+        ...item,
+        id: item.remote_id,
+        created_at: item.remote_created_at,
+        visibility: 'public',
+        is_favorited: false,
+        favorite_count: 0,
+        comment_count: 0,
+      });
+    }
+    // Window-bounded approximation when a media filter is active (peers
+    // report only an unfiltered total)
+    liveTotal = mediaType ? liveItems.length : live.total - (live.items.length - liveItems.length);
+  }
+
+  const merged = [...result.images, ...dedupedRemote, ...liveItems]
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  // Total = local + remote rows that survive the same dedup rules
+  const survivingRemote = db.prepare(`
+    SELECT COUNT(*) as c
+    FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
+    WHERE p.status = 'active' ${mtSql} AND (
+      ri.file_hash IS NULL OR (
+        NOT EXISTS (SELECT 1 FROM images i WHERE i.visibility = 'public' AND i.file_hash = ri.file_hash)
+        AND ri.id = (
+          SELECT MIN(ri2.id) FROM remote_images ri2 JOIN peers p2 ON ri2.peer_id = p2.id
+          WHERE p2.status = 'active' AND ri2.file_hash = ri.file_hash
+        )
+      )
+    )
+  `).get(mediaType ? { mediaType } : {});
+
+  result.images = merged.slice(offset, offset + limit);
+  result.total = result.total + (survivingRemote?.c || 0) + liveTotal;
+  result.limit = limit;
+  result.offset = offset;
+  result.includes_federated = true;
+  return result;
+}
+
 // GET /api/images/public — public gallery feed (local public + federated)
-router.get('/public', (req, res) => {
+router.get('/public', async (req, res) => {
   try {
-    const result = buildImageQuery(req, ["i.visibility = 'public'"]);
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const offset = parseInt(req.query.offset) || 0;
 
-    // Include federated images if federation is enabled
-    const includeFederated = req.query.include_federated !== 'false';
-    if (includeFederated) {
-      try {
-        const db = getDb();
-        const fedEnabled = db.prepare("SELECT value FROM instance_settings WHERE key = 'federation_enabled'").get();
-        if (fedEnabled?.value === 'true') {
-          const limit = Math.min(parseInt(req.query.limit) || 50, 200);
-          const offset = parseInt(req.query.offset) || 0;
-
-          const remoteImages = db.prepare(`
-            SELECT ri.remote_id as id, ri.title, ri.width, ri.height, ri.format, ri.media_type,
-              ri.caption, ri.remote_created_at as created_at, ri.uploaded_by,
-              ri.thumbnail_path, ri.thumbnail_cached, ri.tags_json, ri.metadata_json,
-              ri.peer_id, p.name as peer_name, p.url as peer_url
-            FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
-            WHERE p.status = 'active'
-            ORDER BY ri.remote_created_at DESC LIMIT ? OFFSET ?
-          `).all(limit, offset);
-
-          const enriched = remoteImages.map(img => ({
-            ...img,
-            is_remote: true,
-            visibility: 'public',
-            is_favorited: false,
-            favorite_count: 0,
-            comment_count: 0,
-            tags: img.tags_json ? JSON.parse(img.tags_json) : [],
-            prompt: img.metadata_json ? JSON.parse(img.metadata_json).prompt : null,
-            model: img.metadata_json ? JSON.parse(img.metadata_json).model : null,
-            sampler: img.metadata_json ? JSON.parse(img.metadata_json).sampler : null,
-            tags_json: undefined,
-            metadata_json: undefined,
-          }));
-
-          // Merge and sort by created_at
-          const merged = [...result.images, ...enriched]
-            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-            .slice(0, limit);
-
-          const remoteTotal = db.prepare('SELECT COUNT(*) as c FROM remote_images ri JOIN peers p ON ri.peer_id = p.id WHERE p.status = ?').get('active');
-          result.images = merged;
-          result.total = result.total + (remoteTotal?.c || 0);
-          result.includes_federated = true;
-        }
-      } catch (e) {
-        // Federation query failure shouldn't break the public feed
-      }
+    let result;
+    if (!federationActive(req)) {
+      result = buildImageQuery(req, ["i.visibility = 'public'"]);
+    } else try {
+      result = await buildFederatedFeed(req, ["i.visibility = 'public'"], {}, { limit, offset });
+    } catch (e) {
+      // Federation query failure shouldn't break the public feed
+      result = buildImageQuery(req, ["i.visibility = 'public'"]);
     }
 
     res.json(result);

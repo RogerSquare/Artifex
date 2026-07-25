@@ -1,8 +1,16 @@
 const express = require('express');
 const { getDb } = require('../db');
 const { requireAuth, optionalAuth } = require('../lib/authMiddleware');
+const { remoteMediaUrls } = require('../lib/federation-urls');
 
 const router = express.Router();
+
+// Remote collection entries are addressed as "r<remote_images.id>" in URLs
+// and reorder payloads (remote ids would collide with local image ids)
+function parseRemoteKey(value) {
+  const m = /^r(\d+)$/.exec(String(value));
+  return m ? parseInt(m[1]) : null;
+}
 
 // GET /api/collections — list user's collections (+ public collections)
 router.get('/', optionalAuth, (req, res) => {
@@ -34,10 +42,21 @@ router.get('/', optionalAuth, (req, res) => {
       `).all();
     }
 
-    // Attach up to 4 preview image paths per collection
-    const previewStmt = db.prepare('SELECT i.filepath, i.media_type, i.preview_path FROM collection_images ci JOIN images i ON ci.image_id = i.id WHERE ci.collection_id = ? ORDER BY ci.sort_order ASC LIMIT 4');
+    // Attach up to 4 preview image paths per collection. Remote entries
+    // contribute their locally cached thumbnail as the preview.
+    const previewStmt = db.prepare(`
+      SELECT * FROM (
+        SELECT i.filepath, i.media_type, i.preview_path, ci.sort_order
+        FROM collection_images ci JOIN images i ON ci.image_id = i.id
+        WHERE ci.collection_id = @cid
+        UNION ALL
+        SELECT ri.thumbnail_path as filepath, 'image' as media_type, NULL as preview_path, ci.sort_order
+        FROM collection_images ci JOIN remote_images ri ON ci.remote_image_id = ri.id
+        WHERE ci.collection_id = @cid AND ri.thumbnail_path IS NOT NULL
+      ) ORDER BY sort_order ASC LIMIT 4
+    `);
     for (const col of collections) {
-      col.preview_items = previewStmt.all(col.id);
+      col.preview_items = previewStmt.all({ cid: col.id });
     }
 
     res.json(collections);
@@ -89,11 +108,44 @@ router.get('/:id', optionalAuth, (req, res) => {
       FROM collection_images ci
       JOIN images i ON ci.image_id = i.id
       LEFT JOIN users u ON i.user_id = u.id
-      WHERE ci.collection_id = ?
+      WHERE ci.collection_id = ? AND ci.image_id IS NOT NULL
       ORDER BY ci.sort_order ASC, ci.added_at DESC
     `).all(req.params.id);
 
-    res.json({ ...collection, images, image_count: images.length });
+    // Remote entries: referenced remote_images rows, shaped like feed items
+    const remoteRows = db.prepare(`
+      SELECT ri.*, ci.sort_order, ci.added_at as ci_added_at,
+        p.name as peer_name, p.url as peer_url
+      FROM collection_images ci
+      JOIN remote_images ri ON ci.remote_image_id = ri.id
+      JOIN peers p ON ri.peer_id = p.id
+      WHERE ci.collection_id = ? AND ci.remote_image_id IS NOT NULL
+      ORDER BY ci.sort_order ASC, ci.added_at DESC
+    `).all(req.params.id);
+
+    const remoteImages = remoteRows.map(img => ({
+      ...img,
+      id: img.remote_id,
+      remote_row_id: img.id,
+      created_at: img.remote_created_at,
+      added_at: img.ci_added_at,
+      is_remote: true,
+      visibility: 'public',
+      is_favorited: 0,
+      favorite_count: 0,
+      tags: img.tags_json ? JSON.parse(img.tags_json) : [],
+      ...remoteMediaUrls(img.peer_url, img),
+      tags_json: undefined,
+      preview_path: undefined,
+      filepath: undefined,
+      ci_added_at: undefined,
+    }));
+
+    const merged = [...images, ...remoteImages].sort((a, b) =>
+      (a.sort_order - b.sort_order) || new Date(b.added_at) - new Date(a.added_at)
+    );
+
+    res.json({ ...collection, images: merged, image_count: merged.length });
   } catch (error) {
     const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });
   }
@@ -142,12 +194,15 @@ router.delete('/:id', requireAuth, (req, res) => {
   }
 });
 
-// POST /api/collections/:id/images — add images to collection
+// POST /api/collections/:id/images — add images to collection.
+// imageIds = local image ids; remoteImageIds = remote_images row ids
+// (reference-in-place — live-mode peers have no rows and cannot be added).
 router.post('/:id/images', requireAuth, (req, res) => {
   try {
-    const { imageIds } = req.body;
-    if (!Array.isArray(imageIds) || imageIds.length === 0) {
-      return res.status(400).json({ error: 'imageIds array required' });
+    const imageIds = Array.isArray(req.body.imageIds) ? req.body.imageIds : [];
+    const remoteImageIds = Array.isArray(req.body.remoteImageIds) ? req.body.remoteImageIds : [];
+    if (imageIds.length === 0 && remoteImageIds.length === 0) {
+      return res.status(400).json({ error: 'imageIds or remoteImageIds array required' });
     }
 
     const db = getDb();
@@ -158,14 +213,21 @@ router.post('/:id/images', requireAuth, (req, res) => {
     const maxOrder = db.prepare('SELECT MAX(sort_order) as max FROM collection_images WHERE collection_id = ?').get(req.params.id)?.max || 0;
 
     let added = 0;
-    const insert = db.prepare('INSERT OR IGNORE INTO collection_images (collection_id, image_id, sort_order) VALUES (?, ?, ?)');
-    for (let i = 0; i < imageIds.length; i++) {
-      const result = insert.run(req.params.id, imageIds[i], maxOrder + i + 1);
-      if (result.changes > 0) added++;
+    let order = maxOrder;
+    const insertLocal = db.prepare('INSERT OR IGNORE INTO collection_images (collection_id, image_id, sort_order) VALUES (?, ?, ?)');
+    for (const id of imageIds) {
+      if (insertLocal.run(req.params.id, id, ++order).changes > 0) added++;
     }
 
-    // Auto-set cover if none
-    if (!collection.cover_image_id && added > 0) {
+    const insertRemote = db.prepare('INSERT OR IGNORE INTO collection_images (collection_id, remote_image_id, sort_order) VALUES (?, ?, ?)');
+    const remoteExists = db.prepare('SELECT 1 as x FROM remote_images WHERE id = ?');
+    for (const rid of remoteImageIds) {
+      if (!remoteExists.get(rid)) continue; // stale reference (peer resynced/removed)
+      if (insertRemote.run(req.params.id, rid, ++order).changes > 0) added++;
+    }
+
+    // Auto-set cover if none (local images only — cover_image_id FKs images)
+    if (!collection.cover_image_id && imageIds.length > 0) {
       db.prepare('UPDATE collections SET cover_image_id = ? WHERE id = ? AND cover_image_id IS NULL').run(imageIds[0], req.params.id);
     }
 
@@ -186,10 +248,14 @@ router.put('/:id/reorder', requireAuth, (req, res) => {
     if (!collection) return res.status(404).json({ error: 'Not found' });
     if (collection.user_id !== req.user.id) return res.status(403).json({ error: 'Not your collection' });
 
-    const stmt = db.prepare('UPDATE collection_images SET sort_order = ? WHERE collection_id = ? AND image_id = ?');
+    // Entries may be local ids (numbers) or remote keys ("r<rowid>")
+    const localStmt = db.prepare('UPDATE collection_images SET sort_order = ? WHERE collection_id = ? AND image_id = ?');
+    const remoteStmt = db.prepare('UPDATE collection_images SET sort_order = ? WHERE collection_id = ? AND remote_image_id = ?');
     const updateAll = db.transaction(() => {
       for (let i = 0; i < imageIds.length; i++) {
-        stmt.run(i, req.params.id, imageIds[i]);
+        const remoteId = parseRemoteKey(imageIds[i]);
+        if (remoteId !== null) remoteStmt.run(i, req.params.id, remoteId);
+        else localStmt.run(i, req.params.id, imageIds[i]);
       }
     });
     updateAll();
@@ -208,12 +274,17 @@ router.delete('/:id/images/:imageId', requireAuth, (req, res) => {
     if (!collection) return res.status(404).json({ error: 'Not found' });
     if (collection.user_id !== req.user.id) return res.status(403).json({ error: 'Not your collection' });
 
-    db.prepare('DELETE FROM collection_images WHERE collection_id = ? AND image_id = ?').run(req.params.id, req.params.imageId);
+    const remoteId = parseRemoteKey(req.params.imageId);
+    if (remoteId !== null) {
+      db.prepare('DELETE FROM collection_images WHERE collection_id = ? AND remote_image_id = ?').run(req.params.id, remoteId);
+    } else {
+      db.prepare('DELETE FROM collection_images WHERE collection_id = ? AND image_id = ?').run(req.params.id, req.params.imageId);
 
-    // If removed image was cover, clear it
-    if (collection.cover_image_id === parseInt(req.params.imageId)) {
-      const next = db.prepare('SELECT image_id FROM collection_images WHERE collection_id = ? ORDER BY sort_order ASC LIMIT 1').get(req.params.id);
-      db.prepare('UPDATE collections SET cover_image_id = ? WHERE id = ?').run(next?.image_id || null, req.params.id);
+      // If removed image was cover, clear it (covers are local-only)
+      if (collection.cover_image_id === parseInt(req.params.imageId)) {
+        const next = db.prepare('SELECT image_id FROM collection_images WHERE collection_id = ? AND image_id IS NOT NULL ORDER BY sort_order ASC LIMIT 1').get(req.params.id);
+        db.prepare('UPDATE collections SET cover_image_id = ? WHERE id = ?').run(next?.image_id || null, req.params.id);
+      }
     }
 
     res.json({ success: true });

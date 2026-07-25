@@ -28,24 +28,21 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
   const hasPrev = currentIndex > 0
   const hasNext = currentIndex < images.length - 1
   const isRemote = !!image.is_remote
-  const fullSrc = isRemote ? `${API_URL}/federation/proxy/${image.peer_id}/${image.id}/full` : `${UPLOADS_URL}/${image.filepath}`
   const isOwner = !isRemote && image.user_id === currentUserId
 
-  // Fetch full metadata from peer for remote images
-  const [remoteDetail, setRemoteDetail] = useState(null)
+  // Remote media loads directly from the peer (full_url); metadata is already
+  // fully synced so no detail fetch is needed. If the peer is unreachable,
+  // fall back to the locally cached thumbnail with a notice.
+  const [peerOffline, setPeerOffline] = useState(false)
   useEffect(() => {
-    if (isRemote && image.peer_id) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset when switching images
-      setRemoteDetail(null)
-      fetch(`${API_URL}/federation/proxy/${image.peer_id}/${image.id}/detail`)
-        .then(r => r.json())
-        .then(d => setRemoteDetail(d.image || d))
-        .catch(() => {})
-    }
-  }, [isRemote, image.peer_id, image.id])
-
-  // Merge remote detail into image for display
-  const displayImage = isRemote && remoteDetail ? { ...image, ...remoteDetail, is_remote: true, peer_name: image.peer_name } : image
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional reset when switching images
+    setPeerOffline(false)
+  }, [image.id])
+  const cachedThumb = image.thumbnail_path ? `${UPLOADS_URL}/${image.thumbnail_path}` : null
+  const remoteSrc = peerOffline ? cachedThumb : (image.full_url || cachedThumb)
+  const fullSrc = isRemote ? remoteSrc : `${UPLOADS_URL}/${image.filepath}`
+  const handleMediaError = () => { if (isRemote && !peerOffline) setPeerOffline(true) }
+  const displayImage = image
 
   const resetZoom = useCallback(() => { setZoom(1); setPan({ x: 0, y: 0 }) }, [])
   const goPrev = useCallback(() => { if (hasPrev) { resetZoom(); setImageLoaded(false); onNavigate(images[currentIndex - 1]) } }, [hasPrev, currentIndex, images, onNavigate, resetZoom])
@@ -146,7 +143,9 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
                   <ShareNetwork className="w-3 h-3" /> {image.peer_name}
                 </span>
               )}
-              <div className="relative">
+              {/* Collections/comments key on local image ids — a remote id
+                  would target an unrelated local image */}
+              {!isRemote && <div className="relative">
                 <Btn onClick={openCollectionPicker} active={showCollectionPicker} title="Add to collection">
                   {addedToCollection ? <Check className="w-4 h-4" style={{ color: 'var(--color-green)' }} /> : <FolderPlus className="w-4 h-4" />}
                 </Btn>
@@ -166,13 +165,13 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
                     </div>
                   </>
                 )}
-              </div>
+              </div>}
               {isOwner && (
                 <Btn onClick={() => onToggleVisibility?.(image.id, image.visibility === 'public' ? 'private' : 'public')} title={image.visibility === 'public' ? 'Make private' : 'Make public'}>
                   {image.visibility === 'public' ? <Globe className="w-4 h-4" style={{ color: 'var(--color-green)' }} /> : <Lock className="w-4 h-4" />}
                 </Btn>
               )}
-              {image.visibility === 'public' && (
+              {!isRemote && image.visibility === 'public' && (
                 <Btn onClick={() => { navigator.clipboard.writeText(`${window.location.origin}?image=${image.id}`); setShareCopied(true); setTimeout(() => setShareCopied(false), 2000) }} title="Copy link">
                   {shareCopied ? <Check className="w-4 h-4" style={{ color: 'var(--color-green)' }} /> : <ShareNetwork className="w-4 h-4" />}
                 </Btn>
@@ -236,8 +235,15 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
             </button>
           )}
 
+          {/* Peer offline notice */}
+          {isRemote && peerOffline && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 px-3 py-1.5 rounded-full bg-black/70 backdrop-blur-md text-[12px] text-white/70">
+              Peer unreachable — showing cached thumbnail
+            </div>
+          )}
+
           {/* Image */}
-          {image.media_type === 'video' ? (
+          {image.media_type === 'video' && !peerOffline ? (
             /* Video player — autoplay, loop, with controls */
             <video
               src={fullSrc}
@@ -247,6 +253,7 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
               controls
               className="max-h-[calc(100vh-7.5rem)] max-w-full object-contain select-none rounded-lg"
               onLoadedData={() => setImageLoaded(true)}
+              onError={handleMediaError}
             />
           ) : (
             /* Image with zoom/pan */
@@ -262,6 +269,7 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
                 src={fullSrc}
                 alt={image.title || image.original_name}
                 onLoad={() => setImageLoaded(true)}
+                onError={handleMediaError}
                 className={`max-h-[calc(100vh-7.5rem)] max-w-full object-contain select-none ${imageLoaded ? '' : 'hidden'}`}
                 draggable={false}
               />
@@ -290,8 +298,14 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
               ].filter(Boolean).map(([label, value, isProfile]) => (
                 <div key={label} className="flex items-center justify-between px-3.5 py-2.5">
                   <span className="text-[13px] text-text-secondary">{label}</span>
-                  {isProfile && onViewProfile ? (
-                    <button onClick={() => onViewProfile(value)} className="text-[13px] text-accent hover:underline truncate ml-3 max-w-[160px] cursor-pointer">{value}</button>
+                  {isProfile && (isRemote ? image.peer_url : onViewProfile) ? (
+                    <button
+                      onClick={() => isRemote
+                        ? window.open(`${image.peer_url.replace(/\/+$/, '')}/profile/${encodeURIComponent(value)}`, '_blank', 'noopener')
+                        : onViewProfile(value)}
+                      className="text-[13px] text-accent hover:underline truncate ml-3 max-w-[160px] cursor-pointer"
+                      title={isRemote ? `View profile on ${image.peer_name || 'peer instance'}` : undefined}
+                    >{value}</button>
                   ) : (
                     <span className="text-[13px] text-text truncate ml-3 max-w-[160px]">{value}</span>
                   )}
@@ -302,10 +316,12 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
             {/* Generation metadata */}
             <MetadataPanel image={displayImage} onTagFilter={(tag) => { onTagFilter?.(tag); onClose() }} />
 
-            {/* Comments */}
-            <div className="mt-5 pt-5 border-t border-white/[0.04]">
-              <CommentSection imageId={image.id} />
-            </div>
+            {/* Comments — local images only (remote ids aren't local ids) */}
+            {!isRemote && (
+              <div className="mt-5 pt-5 border-t border-white/[0.04]">
+                <CommentSection imageId={image.id} />
+              </div>
+            )}
           </div>
         </div>
       )}

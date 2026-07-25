@@ -94,10 +94,12 @@ On image upload:
 ## Federation
 - Instance identity in `instance_settings` table (UUID, name, URL)
 - Federation disabled by default — admin enables via settings
-- Peers in `peers` table, synced content in `remote_images`
-- Hub mode: any instance can be a hub (toggle `hub_mode` setting)
-- Push relay: no-domain instances push to hub via `POST /api/hub/push`
-- Remote images flagged with `is_remote: true` in API responses
+- Simple peer list: admin adds peer URLs (manifest-verified) in `peers` table
+- Full metadata syncs into `remote_images` (prompts, workflow JSON, video metadata, file_hash); media bytes are never mirrored
+- Media loads directly from the source peer in the browser via CORS-enabled endpoints (`/api/federation/media/:id/full|preview`, `/api/federation/image/:id[/thumbnail]`); only `visibility='public'` rows are served
+- Remote images flagged with `is_remote: true` and carry `full_url`/`preview_url`/`thumb_url` in API responses
+- Per-peer `mode`: `synced` (default — metadata + thumbnails cached locally) or `live` (nothing stored; feeds fetch the peer's `/federation/public` at browse time with a 30s in-memory cache, items absent while peer offline). Toggle via `PUT /api/federation/peers/:id`; switching to live purges that peer's cache
+- No hub/relay: peers must be reachable from the viewer's browser (LAN or public URL, matching scheme)
 
 ## Docker
 - Multi-stage Dockerfile: frontend build → production image (Node + Python + ffmpeg)

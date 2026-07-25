@@ -3,6 +3,9 @@ const path = require('path');
 const fs = require('fs');
 const { getDb } = require('../db');
 const { requireAuth } = require('../lib/authMiddleware');
+const federationSync = require('../lib/federation-sync');
+const federationFeed = require('../lib/federation-feed');
+const { remoteMediaUrls } = require('../lib/federation-urls');
 
 const router = express.Router();
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
@@ -45,6 +48,16 @@ function requireFederation(req, res, next) {
 }
 
 /**
+ * Middleware: allow cross-origin reads. Only the public media/detail routes
+ * get this — peers' browsers load media directly from this instance.
+ * Deliberately NOT applied to /uploads/* which also serves private files.
+ */
+function allowCrossOrigin(req, res, next) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  next();
+}
+
+/**
  * Build the instance manifest object.
  */
 function getManifest() {
@@ -64,6 +77,30 @@ function getManifest() {
       users: userCount.c,
     },
     capabilities: ['images', 'tags', 'captions', 'nsfw-detection'],
+  };
+}
+
+// Full public field set. /public, /updates, and /image/:id must expose the
+// same shape — peers sync everything the viewer renders (incl. workflow_json,
+// video_metadata) plus filepath/preview_path for building direct media URLs.
+const PUBLIC_IMAGE_COLUMNS = `
+  i.id, i.title, i.original_name, i.width, i.height, i.format, i.media_type,
+  i.prompt, i.negative_prompt, i.model, i.sampler, i.steps, i.cfg_scale, i.seed,
+  i.workflow_json, i.prompt_json, i.video_metadata, i.duration, i.file_size,
+  i.file_hash, i.filepath, i.preview_path, i.caption, i.created_at
+`;
+
+function serializePublicImage(db, img) {
+  const tags = db.prepare(`
+    SELECT t.name, t.category FROM image_tags it JOIN tags t ON it.tag_id = t.id
+    WHERE it.image_id = ? ORDER BY t.category, t.name
+  `).all(img.id);
+
+  return {
+    ...img,
+    tags,
+    thumbnail_url: `/api/federation/image/${img.id}/thumbnail`,
+    detail_url: `/api/federation/image/${img.id}`,
   };
 }
 
@@ -88,28 +125,13 @@ router.get('/public', requireFederation, (req, res) => {
     const total = db.prepare("SELECT COUNT(*) as c FROM images WHERE visibility = 'public'").get();
 
     const images = db.prepare(`
-      SELECT i.id, i.title, i.original_name, i.width, i.height, i.format, i.media_type,
-        i.prompt, i.model, i.sampler, i.steps, i.cfg_scale, i.seed, i.caption,
-        i.created_at, u.username as uploaded_by
+      SELECT ${PUBLIC_IMAGE_COLUMNS}, u.username as uploaded_by
       FROM images i LEFT JOIN users u ON i.user_id = u.id
       WHERE i.visibility = 'public'
       ORDER BY i.created_at DESC LIMIT ? OFFSET ?
     `).all(limit, offset);
 
-    // Add tags and thumbnail URL for each image
-    const enriched = images.map(img => {
-      const tags = db.prepare(`
-        SELECT t.name, t.category FROM image_tags it JOIN tags t ON it.tag_id = t.id
-        WHERE it.image_id = ? ORDER BY t.category, t.name
-      `).all(img.id);
-
-      return {
-        ...img,
-        tags,
-        thumbnail_url: `/api/federation/image/${img.id}/thumbnail`,
-        detail_url: `/api/federation/image/${img.id}`,
-      };
-    });
+    const enriched = images.map(img => serializePublicImage(db, img));
 
     res.json({
       instance: { id: getSetting('instance_id'), name: getSetting('instance_name'), url: getSetting('instance_url') },
@@ -131,21 +153,15 @@ router.get('/updates', requireFederation, (req, res) => {
 
     const db = getDb();
 
-    // New or updated public images since timestamp
+    // New or updated public images since timestamp — same shape as /public
     const images = db.prepare(`
-      SELECT i.id, i.title, i.original_name, i.width, i.height, i.format, i.media_type,
-        i.prompt, i.model, i.sampler, i.caption, i.created_at, u.username as uploaded_by
+      SELECT ${PUBLIC_IMAGE_COLUMNS}, u.username as uploaded_by
       FROM images i LEFT JOIN users u ON i.user_id = u.id
       WHERE i.visibility = 'public' AND i.created_at > ?
       ORDER BY i.created_at DESC
     `).all(since);
 
-    const enriched = images.map(img => {
-      const tags = db.prepare(`
-        SELECT t.name, t.category FROM image_tags it JOIN tags t ON it.tag_id = t.id WHERE it.image_id = ?
-      `).all(img.id);
-      return { ...img, tags, thumbnail_url: `/api/federation/image/${img.id}/thumbnail` };
-    });
+    const enriched = images.map(img => serializePublicImage(db, img));
 
     // Deleted image IDs (from audit log)
     const deleted = db.prepare(`
@@ -166,7 +182,7 @@ router.get('/updates', requireFederation, (req, res) => {
 });
 
 // GET /api/federation/image/:id — single image detail
-router.get('/image/:id', requireFederation, (req, res) => {
+router.get('/image/:id', requireFederation, allowCrossOrigin, (req, res) => {
   try {
     const db = getDb();
     const image = db.prepare(`
@@ -190,7 +206,7 @@ router.get('/image/:id', requireFederation, (req, res) => {
 });
 
 // GET /api/federation/image/:id/thumbnail — serve thumbnail for remote caching
-router.get('/image/:id/thumbnail', requireFederation, (req, res) => {
+router.get('/image/:id/thumbnail', requireFederation, allowCrossOrigin, (req, res) => {
   try {
     const db = getDb();
     const image = db.prepare("SELECT thumbnail_path, filepath FROM images WHERE id = ? AND visibility = 'public'").get(req.params.id);
@@ -208,6 +224,41 @@ router.get('/image/:id/thumbnail', requireFederation, (req, res) => {
   }
 });
 
+// GET /api/federation/media/:id/full — stream the original file (image or
+// video). express sendFile handles Range requests, so video seeking works.
+router.get('/media/:id/full', requireFederation, allowCrossOrigin, (req, res) => {
+  try {
+    const db = getDb();
+    const image = db.prepare("SELECT filepath FROM images WHERE id = ? AND visibility = 'public'").get(req.params.id);
+    if (!image || !image.filepath) return res.status(404).json({ error: 'Image not found' });
+
+    const filePath = path.join(UPLOADS_DIR, image.filepath);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+    res.setHeader('Cache-Control', 'public, max-age=7200');
+    res.sendFile(filePath);
+  } catch (error) {
+    res.status(500).json({ error: 'An internal error occurred' });
+  }
+});
+
+// GET /api/federation/media/:id/preview — video preview clip for grid autoplay
+router.get('/media/:id/preview', requireFederation, allowCrossOrigin, (req, res) => {
+  try {
+    const db = getDb();
+    const image = db.prepare("SELECT preview_path FROM images WHERE id = ? AND visibility = 'public'").get(req.params.id);
+    if (!image || !image.preview_path) return res.status(404).json({ error: 'Preview not found' });
+
+    const filePath = path.join(UPLOADS_DIR, image.preview_path);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+    res.setHeader('Cache-Control', 'public, max-age=7200');
+    res.sendFile(filePath);
+  } catch (error) {
+    res.status(500).json({ error: 'An internal error occurred' });
+  }
+});
+
 // ─── Admin Endpoints (manage federation settings) ───
 
 // GET /api/federation/settings — get federation settings (admin only)
@@ -219,7 +270,6 @@ router.get('/settings', requireAuth, (req, res) => {
       instance_description: getSetting('instance_description'),
       instance_url: getSetting('instance_url'),
       federation_enabled: getSetting('federation_enabled') === 'true',
-      hub_url: getSetting('hub_url') || '',
     });
   } catch (error) {
     res.status(500).json({ error: 'An internal error occurred' });
@@ -234,8 +284,13 @@ router.put('/settings', requireAuth, (req, res) => {
     if (instance_name !== undefined) setSetting('instance_name', instance_name);
     if (instance_description !== undefined) setSetting('instance_description', instance_description);
     if (instance_url !== undefined) setSetting('instance_url', instance_url);
-    if (federation_enabled !== undefined) setSetting('federation_enabled', federation_enabled ? 'true' : 'false');
-    if (req.body.hub_url !== undefined) setSetting('hub_url', req.body.hub_url);
+    if (federation_enabled !== undefined) {
+      setSetting('federation_enabled', federation_enabled ? 'true' : 'false');
+      // Apply at runtime — previously the sync engine only started/stopped on
+      // process restart
+      if (federation_enabled) federationSync.start();
+      else federationSync.stop();
+    }
 
     const audit = require('../lib/audit');
     audit.fromReq(req, 'admin.federation_settings', 'instance', null, req.body);
@@ -246,124 +301,7 @@ router.put('/settings', requireAuth, (req, res) => {
   }
 });
 
-// ─── Proxy Endpoints — fetch full-res and metadata from peers on demand ───
-
-const http = require('http');
-const https = require('https');
-
-function proxyStream(url, res, cacheSeconds = 3600) {
-  return new Promise((resolve, reject) => {
-    const client = url.startsWith('https') ? https : http;
-    client.get(url, { timeout: 30000 }, (upstream) => {
-      if (upstream.statusCode !== 200) {
-        res.status(upstream.statusCode || 502).json({ error: 'Peer returned error' });
-        upstream.resume();
-        return resolve();
-      }
-      // Forward content-type and set cache
-      if (upstream.headers['content-type']) res.setHeader('Content-Type', upstream.headers['content-type']);
-      res.setHeader('Cache-Control', `public, max-age=${cacheSeconds}`);
-      upstream.pipe(res);
-      upstream.on('end', resolve);
-      upstream.on('error', reject);
-    }).on('error', (err) => {
-      res.status(502).json({ error: 'Cannot reach peer' });
-      resolve();
-    });
-  });
-}
-
-// GET /api/federation/proxy/:peerId/:remoteId/detail — fetch full metadata from peer
-router.get('/proxy/:peerId/:remoteId/detail', async (req, res) => {
-  try {
-    const db = getDb();
-    const peer = db.prepare('SELECT url FROM peers WHERE id = ?').get(req.params.peerId);
-    if (!peer || !peer.url || peer.url === 'push-only') {
-      // Fallback to stored metadata for push-only peers
-      const img = db.prepare('SELECT * FROM remote_images WHERE peer_id = ? AND remote_id = ?').get(req.params.peerId, req.params.remoteId);
-      if (!img) return res.status(404).json({ error: 'Image not found' });
-      return res.json({
-        image: {
-          ...img,
-          tags: img.tags_json ? JSON.parse(img.tags_json) : [],
-          ...(img.metadata_json ? JSON.parse(img.metadata_json) : {}),
-          tags_json: undefined, metadata_json: undefined,
-        }
-      });
-    }
-
-    // Fetch from peer
-    const fetchJson = (url) => new Promise((resolve, reject) => {
-      const client = url.startsWith('https') ? https : http;
-      client.get(url, { timeout: 15000 }, (r) => {
-        if (r.statusCode !== 200) return reject(new Error(`HTTP ${r.statusCode}`));
-        let data = '';
-        r.on('data', c => data += c);
-        r.on('end', () => { try { resolve(JSON.parse(data)) } catch (e) { reject(e) } });
-      }).on('error', reject);
-    });
-
-    const detail = await fetchJson(`${peer.url}/api/federation/image/${req.params.remoteId}`);
-    res.setHeader('Cache-Control', 'public, max-age=300');
-    res.json(detail);
-  } catch (error) {
-    // Fallback to stored data
-    const db = getDb();
-    const img = db.prepare('SELECT * FROM remote_images WHERE peer_id = ? AND remote_id = ?').get(req.params.peerId, req.params.remoteId);
-    if (img) {
-      res.json({
-        image: {
-          ...img,
-          tags: img.tags_json ? JSON.parse(img.tags_json) : [],
-          ...(img.metadata_json ? JSON.parse(img.metadata_json) : {}),
-          tags_json: undefined, metadata_json: undefined,
-        }
-      });
-    } else {
-      res.status(502).json({ error: 'Cannot reach peer and no cached data' });
-    }
-  }
-});
-
-// GET /api/federation/proxy/:peerId/:remoteId/full — proxy full-res image from peer
-router.get('/proxy/:peerId/:remoteId/full', async (req, res) => {
-  try {
-    const db = getDb();
-    const peer = db.prepare('SELECT url FROM peers WHERE id = ?').get(req.params.peerId);
-    if (!peer || !peer.url || peer.url === 'push-only') {
-      // For push-only peers, serve the cached thumbnail as best available
-      const img = db.prepare('SELECT thumbnail_path FROM remote_images WHERE peer_id = ? AND remote_id = ?').get(req.params.peerId, req.params.remoteId);
-      if (img?.thumbnail_path) {
-        return res.sendFile(path.join(UPLOADS_DIR, img.thumbnail_path));
-      }
-      return res.status(404).json({ error: 'Full image not available for push-only peer' });
-    }
-
-    // First get the filepath from peer's image detail
-    const fetchJson = (url) => new Promise((resolve, reject) => {
-      const client = url.startsWith('https') ? https : http;
-      client.get(url, { timeout: 15000 }, (r) => {
-        if (r.statusCode !== 200) return reject(new Error(`HTTP ${r.statusCode}`));
-        let data = '';
-        r.on('data', c => data += c);
-        r.on('end', () => { try { resolve(JSON.parse(data)) } catch (e) { reject(e) } });
-      }).on('error', reject);
-    });
-
-    const detail = await fetchJson(`${peer.url}/api/federation/image/${req.params.remoteId}`);
-    const filepath = detail.image?.filepath;
-    if (!filepath) return res.status(404).json({ error: 'Image filepath not found' });
-
-    // Stream the full image from peer
-    await proxyStream(`${peer.url}/uploads/${filepath}`, res, 7200);
-  } catch (error) {
-    res.status(502).json({ error: 'Cannot fetch full image from peer' });
-  }
-});
-
 // ─── Peer Management (Admin) ───
-
-const federationSync = require('../lib/federation-sync');
 
 // GET /api/federation/peers — list all peers
 router.get('/peers', requireAuth, (req, res) => {
@@ -371,6 +309,27 @@ router.get('/peers', requireAuth, (req, res) => {
     const db = getDb();
     const peers = db.prepare('SELECT * FROM peers ORDER BY added_at DESC').all();
     res.json({ peers });
+  } catch (error) {
+    res.status(500).json({ error: 'An internal error occurred' });
+  }
+});
+
+// GET /api/federation/peers/health — live reachability probe for the status UI.
+// Transient result only; sync status/error columns are untouched.
+router.get('/peers/health', requireAuth, async (req, res) => {
+  try {
+    const db = getDb();
+    const peers = db.prepare('SELECT id, url FROM peers').all();
+    const results = await Promise.all(peers.map(async (peer) => {
+      const started = Date.now();
+      try {
+        await federationSync.fetchJson(`${peer.url}/api/federation/manifest`, 3000);
+        return { id: peer.id, online: true, latency_ms: Date.now() - started };
+      } catch {
+        return { id: peer.id, online: false, latency_ms: null };
+      }
+    }));
+    res.json({ peers: results });
   } catch (error) {
     res.status(500).json({ error: 'An internal error occurred' });
   }
@@ -434,6 +393,51 @@ router.delete('/peers/:id', requireAuth, (req, res) => {
   }
 });
 
+// PUT /api/federation/peers/:id — change peer settings (currently: mode).
+// Switching to 'live' purges everything cached from that peer; switching back
+// to 'synced' kicks off a background sync so content reappears.
+router.put('/peers/:id', requireAuth, (req, res) => {
+  try {
+    const { mode } = req.body;
+    if (!['synced', 'live'].includes(mode)) {
+      return res.status(400).json({ error: "mode must be 'synced' or 'live'" });
+    }
+
+    const db = getDb();
+    const peer = db.prepare('SELECT * FROM peers WHERE id = ?').get(req.params.id);
+    if (!peer) return res.status(404).json({ error: 'Peer not found' });
+
+    if (mode === 'live' && peer.mode !== 'live') {
+      // Purge cached rows + thumbnail files — live peers store nothing locally.
+      // Also reset the sync cursor: a later switch back to 'synced' must do a
+      // full pull, not an incremental /updates that skips pre-purge content.
+      const cached = db.prepare(
+        'SELECT thumbnail_path FROM remote_images WHERE peer_id = ? AND thumbnail_path IS NOT NULL'
+      ).all(peer.id);
+      db.prepare('DELETE FROM remote_images WHERE peer_id = ?').run(peer.id);
+      db.prepare('UPDATE peers SET last_synced_at = NULL, image_count = 0 WHERE id = ?').run(peer.id);
+      for (const row of cached) {
+        try { fs.unlinkSync(path.join(UPLOADS_DIR, row.thumbnail_path)); } catch { /* already gone */ }
+      }
+    }
+
+    db.prepare('UPDATE peers SET mode = ? WHERE id = ?').run(mode, peer.id);
+    federationFeed.clearLiveCache(peer.id);
+
+    if (mode === 'synced' && peer.mode !== 'synced') {
+      // Refill the cache in the background; feed shows content as it lands
+      federationSync.syncPeer(peer.id).catch(() => {});
+    }
+
+    const audit = require('../lib/audit');
+    audit.fromReq(req, 'admin.peer_mode', 'peer', peer.id, { url: peer.url, mode });
+
+    res.json({ success: true, peer: db.prepare('SELECT * FROM peers WHERE id = ?').get(peer.id) });
+  } catch (error) {
+    res.status(500).json({ error: 'An internal error occurred' });
+  }
+});
+
 // POST /api/federation/peers/:id/sync — manually trigger sync for a peer
 router.post('/peers/:id/sync', requireAuth, async (req, res) => {
   try {
@@ -454,37 +458,70 @@ router.post('/sync', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/federation/feed — merged feed of remote images from all peers
-router.get('/feed', (req, res) => {
+// GET /api/federation/feed — merged feed of remote images from all peers.
+// Synced peers serve from the local cache; live-mode peers are fetched from
+// the peer at request time (absent while the peer is offline).
+router.get('/feed', async (req, res) => {
   try {
     const db = getDb();
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
     const peerId = req.query.peer ? parseInt(req.query.peer) : null;
 
-    let where = '';
-    const params = {};
-    if (peerId) { where = 'WHERE ri.peer_id = @peerId'; params.peerId = peerId; }
+    // A single live-mode peer pages straight through to the peer's API
+    if (peerId) {
+      const peer = db.prepare('SELECT * FROM peers WHERE id = ?').get(peerId);
+      if (!peer) return res.status(404).json({ error: 'Peer not found' });
+      if (peer.mode === 'live') {
+        try {
+          const { items, total } = await federationFeed.fetchLiveItems(peer, limit, offset);
+          return res.json({ images: items, total, limit, offset });
+        } catch {
+          return res.json({ images: [], total: 0, limit, offset, peer_offline: true });
+        }
+      }
+    }
 
-    const total = db.prepare(`SELECT COUNT(*) as c FROM remote_images ri ${where}`).get(params);
+    // Merged pagination across sources: first offset+limit rows of each
+    // source, merged, then sliced (same approach as /api/images/public)
+    const windowSize = offset + limit;
+    let where = "WHERE p.mode != 'live'";
+    const params = {};
+    if (peerId) { where += ' AND ri.peer_id = @peerId'; params.peerId = peerId; }
+
+    const total = db.prepare(`SELECT COUNT(*) as c FROM remote_images ri JOIN peers p ON ri.peer_id = p.id ${where}`).get(params);
 
     const images = db.prepare(`
       SELECT ri.*, p.name as peer_name, p.url as peer_url, p.instance_id as peer_instance_id
       FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
       ${where}
-      ORDER BY ri.remote_created_at DESC LIMIT @limit OFFSET @offset
-    `).all({ ...params, limit, offset });
+      ORDER BY ri.remote_created_at DESC LIMIT @windowSize
+    `).all({ ...params, windowSize });
 
-    // Parse JSON fields
+    // Parse JSON fields, add direct-to-peer media URLs; local cached
+    // thumbnail_path stays as the offline fallback
     const enriched = images.map(img => ({
       ...img,
+      is_remote: true,
+      remote_row_id: img.id, // ri.* puts the remote_images row id in `id`
       tags: img.tags_json ? JSON.parse(img.tags_json) : [],
-      metadata: img.metadata_json ? JSON.parse(img.metadata_json) : {},
+      metadata: {
+        prompt: img.prompt, model: img.model, sampler: img.sampler,
+        steps: img.steps, cfg_scale: img.cfg_scale, seed: img.seed,
+      },
+      ...remoteMediaUrls(img.peer_url, img),
       tags_json: undefined,
-      metadata_json: undefined,
+      filepath: undefined,
+      preview_path: undefined,
     }));
 
-    res.json({ images: enriched, total: total.c, limit, offset });
+    const live = peerId ? { items: [], total: 0 } : await federationFeed.fetchAllLiveWindows(windowSize);
+
+    const merged = [...enriched, ...live.items]
+      .sort((a, b) => new Date(b.remote_created_at) - new Date(a.remote_created_at))
+      .slice(offset, offset + limit);
+
+    res.json({ images: merged, total: total.c + live.total, limit, offset });
   } catch (error) {
     res.status(500).json({ error: 'An internal error occurred' });
   }

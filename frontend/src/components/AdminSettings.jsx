@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { ArrowLeft, Users, HardDrives, Image, FilmStrip, Heart, Shield, Trash, ArrowCounterClockwise, Prohibit, Key, CircleNotch, Check, ArrowClockwise, ShareNetwork, Globe, Plus, X } from '@phosphor-icons/react'
 import { API_URL } from '../config'
 import { useAuth } from '../context/AuthContext'
+import usePeerHealth from '../hooks/usePeerHealth'
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -469,6 +470,9 @@ function FederationTab({ authHeaders }) {
   const [adding, setAdding] = useState(false)
   const [syncing, setSyncing] = useState({})
   const [error, setError] = useState('')
+  const peerHealth = usePeerHealth(authHeaders)
+
+  const [loadError, setLoadError] = useState('')
 
   const fetchData = useCallback(async () => {
     try {
@@ -476,9 +480,17 @@ function FederationTab({ authHeaders }) {
         fetch(`${API_URL}/federation/settings`, { headers: authHeaders }),
         fetch(`${API_URL}/federation/peers`, { headers: authHeaders }),
       ])
-      if (settingsRes.ok) setSettings(await settingsRes.json())
+      if (settingsRes.ok) {
+        setSettings(await settingsRes.json())
+        setLoadError('')
+      } else {
+        const err = await settingsRes.json().catch(() => ({}))
+        setLoadError(err.error || `Failed to load federation settings (HTTP ${settingsRes.status})`)
+      }
       if (peersRes.ok) { const d = await peersRes.json(); setPeers(d.peers || []) }
-    } catch {}
+    } catch {
+      setLoadError('Failed to reach the server')
+    }
   }, [authHeaders])
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- standard data-fetch on mount
@@ -513,6 +525,14 @@ function FederationTab({ authHeaders }) {
     fetchData()
   }
 
+  const setPeerMode = async (id, mode) => {
+    await fetch(`${API_URL}/federation/peers/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ mode })
+    })
+    fetchData()
+  }
+
   const syncPeer = async (id) => {
     setSyncing(prev => ({ ...prev, [id]: true }))
     await fetch(`${API_URL}/federation/peers/${id}/sync`, { method: 'POST', headers: authHeaders })
@@ -527,7 +547,19 @@ function FederationTab({ authHeaders }) {
     fetchData()
   }
 
-  if (!settings) return <div className="text-center py-8 text-text-muted">Loading...</div>
+  if (!settings) {
+    if (loadError) {
+      return (
+        <div className="text-center py-8">
+          <p className="text-[13px] text-red mb-3">{loadError}</p>
+          <button onClick={fetchData} className="px-4 py-2 bg-accent text-white rounded-lg text-[12px] font-semibold hover:bg-accent-hover transition-all">
+            Retry
+          </button>
+        </div>
+      )
+    }
+    return <div className="text-center py-8 text-text-muted">Loading...</div>
+  }
 
   return (
     <div className="space-y-6">
@@ -605,26 +637,47 @@ function FederationTab({ authHeaders }) {
           </div>
         ) : (
           <div className="space-y-2">
-            {peers.map(peer => (
+            {peers.map(peer => {
+              const live = peerHealth[peer.id]
+              const dotClass = live
+                ? (live.online ? 'bg-green' : 'bg-red')
+                : (peer.status === 'active' ? 'bg-green' : peer.status === 'error' ? 'bg-red' : 'bg-yellow')
+              const dotTitle = live
+                ? (live.online ? `Online (${live.latency_ms}ms)` : 'Offline')
+                : 'Status from last sync'
+              return (
               <div key={peer.id} className="flex items-center gap-3 p-3 bg-bg-elevated rounded-xl">
-                <span className={`w-2 h-2 rounded-full shrink-0 ${peer.status === 'active' ? 'bg-green' : peer.status === 'error' ? 'bg-red' : 'bg-yellow'}`} />
+                <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} title={dotTitle} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-[13px] font-medium text-text truncate">{peer.name}</span>
                     <span className="text-[11px] text-text-muted">{peer.image_count} images</span>
+                    {live && !live.online && <span className="text-[10px] font-medium text-red">offline</span>}
                   </div>
                   <p className="text-[11px] text-text-muted/60 truncate">{peer.url}</p>
-                  {peer.error && <p className="text-[10px] text-red truncate">{peer.error}</p>}
-                  {peer.last_synced_at && <p className="text-[10px] text-text-muted/40">Last sync: {new Date(peer.last_synced_at).toLocaleString()}</p>}
+                  {peer.error && peer.mode !== 'live' && <p className="text-[10px] text-red truncate">{peer.error}</p>}
+                  {peer.mode === 'live'
+                    ? <p className="text-[10px] text-text-muted/40">Live — pulled from peer on demand, nothing cached</p>
+                    : peer.last_synced_at && <p className="text-[10px] text-text-muted/40">Last sync: {new Date(peer.last_synced_at).toLocaleString()}</p>}
                 </div>
+                <button
+                  onClick={() => setPeerMode(peer.id, peer.mode === 'live' ? 'synced' : 'live')}
+                  className={`shrink-0 px-2 py-1 rounded-md text-[11px] font-semibold transition-all ${peer.mode === 'live' ? 'bg-accent/15 text-accent' : 'bg-white/[0.06] text-text-muted hover:text-text'}`}
+                  title={peer.mode === 'live' ? 'Pulling live from peer — click to sync & cache locally' : 'Caching locally — click to pull live (removes cached copies)'}
+                >
+                  {peer.mode === 'live' ? 'Live' : 'Cached'}
+                </button>
+                {peer.mode !== 'live' && (
                 <button onClick={() => syncPeer(peer.id)} disabled={syncing[peer.id]} className="p-1.5 rounded-md text-text-muted hover:text-accent hover:bg-accent/10 transition-all" title="Sync now">
                   {syncing[peer.id] ? <CircleNotch className="w-4 h-4 animate-spin" /> : <ArrowClockwise className="w-4 h-4" />}
                 </button>
+                )}
                 <button onClick={() => removePeer(peer.id)} className="p-1.5 rounded-md text-text-muted hover:text-red hover:bg-red/10 transition-all" title="Remove">
                   <Trash className="w-4 h-4" />
                 </button>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

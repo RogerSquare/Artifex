@@ -11,9 +11,11 @@ const fs = require('fs');
 
 const THUMBNAILS_DIR = path.join(__dirname, '..', 'uploads', 'thumbnails');
 const DEFAULT_SYNC_INTERVAL = 30 * 60 * 1000; // 30 minutes
+const SYNC_ALL_COOLDOWN_MS = 10 * 1000;
 
 let syncTimer = null;
 let syncing = false;
+let lastSyncAllAt = 0;
 
 /**
  * Fetch JSON from a URL.
@@ -88,6 +90,7 @@ async function syncPeer(peerId) {
   const db = getDb();
   const peer = db.prepare('SELECT * FROM peers WHERE id = ?').get(peerId);
   if (!peer || peer.status === 'blocked') return { synced: 0 };
+  if (peer.mode === 'live') return { synced: 0, live: true }; // live peers store nothing locally
 
   try {
     // Incremental sync — fetch updates since last sync
@@ -102,28 +105,66 @@ async function syncPeer(peerId) {
     const images = data.images || [];
     const deleted = data.deleted || [];
 
-    // Upsert remote images
+    // Upsert remote images with the peer's full public field set (everything
+    // the viewer renders, plus filepath/preview_path for direct media URLs)
     const upsert = db.prepare(`
-      INSERT INTO remote_images (peer_id, remote_id, title, tags_json, caption, metadata_json, uploaded_by, width, height, format, media_type, remote_created_at, synced_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      INSERT INTO remote_images (
+        peer_id, remote_id, title, tags_json, caption, uploaded_by,
+        width, height, format, media_type,
+        prompt, negative_prompt, model, sampler, steps, cfg_scale, seed,
+        workflow_json, prompt_json, video_metadata, duration, file_size, file_hash,
+        filepath, preview_path, remote_created_at, synced_at
+      ) VALUES (
+        @peer_id, @remote_id, @title, @tags_json, @caption, @uploaded_by,
+        @width, @height, @format, @media_type,
+        @prompt, @negative_prompt, @model, @sampler, @steps, @cfg_scale, @seed,
+        @workflow_json, @prompt_json, @video_metadata, @duration, @file_size, @file_hash,
+        @filepath, @preview_path, @remote_created_at, datetime('now')
+      )
       ON CONFLICT(peer_id, remote_id) DO UPDATE SET
         title=excluded.title, tags_json=excluded.tags_json, caption=excluded.caption,
-        metadata_json=excluded.metadata_json, synced_at=datetime('now')
+        uploaded_by=excluded.uploaded_by, width=excluded.width, height=excluded.height,
+        format=excluded.format, media_type=excluded.media_type,
+        prompt=excluded.prompt, negative_prompt=excluded.negative_prompt,
+        model=excluded.model, sampler=excluded.sampler, steps=excluded.steps,
+        cfg_scale=excluded.cfg_scale, seed=excluded.seed,
+        workflow_json=excluded.workflow_json, prompt_json=excluded.prompt_json,
+        video_metadata=excluded.video_metadata, duration=excluded.duration,
+        file_size=excluded.file_size, file_hash=excluded.file_hash,
+        filepath=excluded.filepath, preview_path=excluded.preview_path,
+        synced_at=datetime('now')
     `);
 
     const syncBatch = db.transaction(() => {
       for (const img of images) {
-        const metadata = JSON.stringify({
-          prompt: img.prompt, model: img.model, sampler: img.sampler,
-          steps: img.steps, cfg_scale: img.cfg_scale, seed: img.seed,
+        upsert.run({
+          peer_id: peerId,
+          remote_id: img.id,
+          title: img.title ?? null,
+          tags_json: JSON.stringify(img.tags || []),
+          caption: img.caption ?? null,
+          uploaded_by: img.uploaded_by ?? null,
+          width: img.width ?? null,
+          height: img.height ?? null,
+          format: img.format ?? null,
+          media_type: img.media_type || 'image',
+          prompt: img.prompt ?? null,
+          negative_prompt: img.negative_prompt ?? null,
+          model: img.model ?? null,
+          sampler: img.sampler ?? null,
+          steps: img.steps ?? null,
+          cfg_scale: img.cfg_scale ?? null,
+          seed: img.seed != null ? String(img.seed) : null,
+          workflow_json: img.workflow_json ?? null,
+          prompt_json: img.prompt_json ?? null,
+          video_metadata: img.video_metadata ?? null,
+          duration: img.duration ?? null,
+          file_size: img.file_size ?? null,
+          file_hash: img.file_hash ?? null,
+          filepath: img.filepath ?? null,
+          preview_path: img.preview_path ?? null,
+          remote_created_at: img.created_at ?? null,
         });
-        upsert.run(
-          peerId, img.id, img.title,
-          JSON.stringify(img.tags || []), img.caption || null,
-          metadata, img.uploaded_by || null,
-          img.width || null, img.height || null, img.format || null,
-          img.media_type || 'image', img.created_at || null
-        );
       }
 
       // Remove deleted images
@@ -154,6 +195,28 @@ async function syncPeer(peerId) {
       }
     }
 
+    // Backfill thumbnails that failed to cache on earlier syncs (e.g. the
+    // peer rate-limited a batch mid-download). Incremental syncs never
+    // re-send those images, so retry here — bounded per cycle, still
+    // non-fatal on failure.
+    const uncached = db.prepare(
+      'SELECT remote_id FROM remote_images WHERE peer_id = ? AND (thumbnail_cached = 0 OR thumbnail_path IS NULL) LIMIT 50'
+    ).all(peerId);
+    for (const row of uncached) {
+      try {
+        const thumbFilename = `remote_${peerId}_${row.remote_id}.webp`;
+        const thumbPath = path.join(THUMBNAILS_DIR, thumbFilename);
+        if (!fs.existsSync(thumbPath)) {
+          await downloadFile(`${peer.url}/api/federation/image/${row.remote_id}/thumbnail`, thumbPath);
+        }
+        db.prepare('UPDATE remote_images SET thumbnail_cached = 1, thumbnail_path = ? WHERE peer_id = ? AND remote_id = ?')
+          .run(`thumbnails/${thumbFilename}`, peerId, row.remote_id);
+        cached++;
+      } catch (e) {
+        // Retried again next cycle
+      }
+    }
+
     // Update peer status
     const totalRemote = db.prepare('SELECT COUNT(*) as c FROM remote_images WHERE peer_id = ?').get(peerId);
     db.prepare("UPDATE peers SET last_synced_at = datetime('now'), image_count = ?, status = 'active', error = NULL WHERE id = ?")
@@ -174,13 +237,18 @@ async function syncPeer(peerId) {
  */
 async function syncAll() {
   if (syncing) return;
+  // Cooldown: rapid repeat triggers (e.g. mashing "Sync All") must not hammer
+  // peers — their federation limiters will 429 us. Per-peer manual sync is
+  // intentionally not throttled.
+  if (Date.now() - lastSyncAllAt < SYNC_ALL_COOLDOWN_MS) return;
+  lastSyncAllAt = Date.now();
   syncing = true;
 
   const db = getDb();
   const enabled = db.prepare("SELECT value FROM instance_settings WHERE key = 'federation_enabled'").get();
   if (enabled?.value !== 'true') { syncing = false; return; }
 
-  const peers = db.prepare("SELECT id, name FROM peers WHERE status != 'blocked'").all();
+  const peers = db.prepare("SELECT id, name FROM peers WHERE status != 'blocked' AND mode != 'live'").all();
 
   for (const peer of peers) {
     await syncPeer(peer.id);
@@ -210,4 +278,4 @@ function stop() {
   }
 }
 
-module.exports = { verifyPeer, syncPeer, syncAll, start, stop };
+module.exports = { verifyPeer, syncPeer, syncAll, start, stop, fetchJson };

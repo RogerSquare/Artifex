@@ -1,6 +1,19 @@
 const fs = require('fs');
 
 /**
+ * Parse an embedded creation timestamp — accepted only if it's a real date
+ * in a sane window (2000-01-01 .. now+1d).
+ */
+function parseCreationDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return null;
+  const ms = d.getTime();
+  if (ms < 946684800000 || ms > Date.now() + 86400000) return null;
+  return d.toISOString();
+}
+
+/**
  * Extract AI generation metadata from an image file.
  * Supports: ComfyUI (PNG tEXt chunks), A1111/Forge (PNG tEXt or EXIF), NovelAI
  */
@@ -17,6 +30,7 @@ async function extractMetadata(filePath) {
     workflow_json: null,
     metadata_raw: null,
     has_metadata: false,
+    original_created_at: null,
   };
 
   try {
@@ -24,6 +38,10 @@ async function extractMetadata(filePath) {
     if (ext === 'png') {
       const chunks = readPngTextChunks(filePath);
       parsePngChunks(chunks, result);
+      // PNG spec "Creation Time" chunk and common variants
+      result.original_created_at = parseCreationDate(
+        chunks['Creation Time'] || chunks['creation_time'] || chunks['date:create']
+      );
     } else if (ext === 'jpg' || ext === 'jpeg') {
       parseJpegExif(filePath, result);
     } else if (ext === 'webp') {
@@ -340,6 +358,11 @@ function extractVideoMetadata(filePath) {
         seed: null,
         prompt_json: null,
         workflow_json: null,
+        // Container/stream creation_time — the authoritative "when was this
+        // video actually made" signal (e.g. 2025-11-12T04:49:06.000000Z)
+        original_created_at: parseCreationDate(
+          format.tags?.creation_time || videoStream?.tags?.creation_time
+        ),
         video_metadata: {
           // Video track
           video_codec: videoStream?.codec_name || null,

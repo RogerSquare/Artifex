@@ -44,7 +44,11 @@ export default function UploadZone({ onClose, onUploadComplete, authHeaders = {}
       const batch = pending.slice(i, i + 5)
       const batchNames = batch.map(entry => entry.file.name)
       const formData = new FormData()
-      batch.forEach(entry => formData.append('images', entry.file))
+      batch.forEach(entry => {
+        formData.append('images', entry.file)
+        // Original file timestamp — the backend uses it as the grid sort date
+        formData.append('last_modified', String(entry.file.lastModified || ''))
+      })
 
       setFiles(prev => prev.map(f => batchNames.includes(f.file.name) && f.status === 'pending' ? { ...f, status: 'uploading' } : f))
 

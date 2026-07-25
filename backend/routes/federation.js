@@ -87,7 +87,7 @@ const PUBLIC_IMAGE_COLUMNS = `
   i.id, i.title, i.original_name, i.width, i.height, i.format, i.media_type,
   i.prompt, i.negative_prompt, i.model, i.sampler, i.steps, i.cfg_scale, i.seed,
   i.workflow_json, i.prompt_json, i.video_metadata, i.duration, i.file_size,
-  i.file_hash, i.filepath, i.preview_path, i.caption, i.created_at
+  i.file_hash, i.filepath, i.preview_path, i.caption, i.created_at, i.original_created_at
 `;
 
 function serializePublicImage(db, img) {
@@ -560,7 +560,7 @@ router.get('/feed', optionalAuth, async (req, res) => {
       SELECT ri.*, p.name as peer_name, p.url as peer_url, p.instance_id as peer_instance_id
       FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
       ${where}
-      ORDER BY ri.remote_created_at DESC LIMIT @windowSize
+      ORDER BY COALESCE(ri.original_created_at, ri.remote_created_at) DESC LIMIT @windowSize
     `).all({ ...params, windowSize });
 
     // Parse JSON fields, add direct-to-peer media URLs; local cached
@@ -582,8 +582,9 @@ router.get('/feed', optionalAuth, async (req, res) => {
 
     const live = peerId ? { items: [], total: 0 } : await federationFeed.fetchAllLiveWindows(windowSize, null, uid);
 
+    const sortDate = (x) => x.original_created_at || x.remote_created_at;
     const merged = [...enriched, ...live.items]
-      .sort((a, b) => new Date(b.remote_created_at) - new Date(a.remote_created_at))
+      .sort((a, b) => new Date(sortDate(b)) - new Date(sortDate(a)))
       .slice(offset, offset + limit);
 
     res.json({ images: merged, total: total.c + live.total, limit, offset });

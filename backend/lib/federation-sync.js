@@ -113,13 +113,13 @@ async function syncPeer(peerId) {
         width, height, format, media_type,
         prompt, negative_prompt, model, sampler, steps, cfg_scale, seed,
         workflow_json, prompt_json, video_metadata, duration, file_size, file_hash,
-        filepath, preview_path, remote_created_at, synced_at
+        filepath, preview_path, original_created_at, remote_created_at, synced_at
       ) VALUES (
         @peer_id, @remote_id, @title, @tags_json, @caption, @uploaded_by,
         @width, @height, @format, @media_type,
         @prompt, @negative_prompt, @model, @sampler, @steps, @cfg_scale, @seed,
         @workflow_json, @prompt_json, @video_metadata, @duration, @file_size, @file_hash,
-        @filepath, @preview_path, @remote_created_at, datetime('now')
+        @filepath, @preview_path, @original_created_at, @remote_created_at, datetime('now')
       )
       ON CONFLICT(peer_id, remote_id) DO UPDATE SET
         title=excluded.title, tags_json=excluded.tags_json, caption=excluded.caption,
@@ -132,6 +132,7 @@ async function syncPeer(peerId) {
         video_metadata=excluded.video_metadata, duration=excluded.duration,
         file_size=excluded.file_size, file_hash=excluded.file_hash,
         filepath=excluded.filepath, preview_path=excluded.preview_path,
+        original_created_at=excluded.original_created_at,
         synced_at=datetime('now')
     `);
 
@@ -163,6 +164,7 @@ async function syncPeer(peerId) {
           file_hash: img.file_hash ?? null,
           filepath: img.filepath ?? null,
           preview_path: img.preview_path ?? null,
+          original_created_at: img.original_created_at ?? null,
           remote_created_at: img.created_at ?? null,
         });
       }

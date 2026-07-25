@@ -52,6 +52,7 @@ function shapeLiveItem(peer, img) {
     duration: img.duration ?? null,
     file_size: img.file_size ?? null,
     file_hash: img.file_hash ?? null,
+    original_created_at: img.original_created_at ?? null,
     remote_created_at: img.created_at ?? null,
     thumbnail_cached: 0,
     thumbnail_path: null,

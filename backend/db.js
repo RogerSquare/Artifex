@@ -141,6 +141,9 @@ const initDb = () => {
   addColumnIfMissing('images', 'file_hash', 'TEXT');
   addColumnIfMissing('images', 'caption', 'TEXT');
   addColumnIfMissing('images', 'analysis_path', 'TEXT');
+  // When the file was originally created (browser lastModified on upload,
+  // file mtime on folder import) — the default grid sort key
+  addColumnIfMissing('images', 'original_created_at', 'TEXT');
 
   // Create indexes (safe to run after migrations)
   db.exec(`
@@ -284,6 +287,7 @@ const initDb = () => {
       file_hash TEXT,
       filepath TEXT,
       preview_path TEXT,
+      original_created_at TEXT,
       remote_created_at TEXT,
       synced_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (peer_id) REFERENCES peers(id) ON DELETE CASCADE,
@@ -297,6 +301,7 @@ const initDb = () => {
   // Live-mode peers: mode='live' means nothing is cached locally — content is
   // pulled from the peer's API at browse time (feat-federation-live-mode-001)
   addColumnIfMissing('peers', 'mode', "TEXT DEFAULT 'synced'");
+  addColumnIfMissing('remote_images', 'original_created_at', 'TEXT');
 
   // Collections can reference remote images (feat-remote-select-collect-001):
   // image_id becomes nullable, remote_image_id points at the synced
@@ -398,6 +403,27 @@ const initDb = () => {
     db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('instance_url', ?)").run(seedUrl);
     db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('federation_enabled', ?)").run(seedFederation);
     console.log(`Instance ID generated: ${instanceId}`);
+  }
+
+  // One-time backfill of original_created_at: the file's mtime when it's
+  // older than the DB row (upload copies can reset mtime to import time,
+  // in which case created_at is the better evidence)
+  const needsBackfill = db.prepare('SELECT COUNT(*) as c FROM images WHERE original_created_at IS NULL').get().c;
+  if (needsBackfill > 0) {
+    const rows = db.prepare('SELECT id, filepath, created_at FROM images WHERE original_created_at IS NULL').all();
+    const setStmt = db.prepare('UPDATE images SET original_created_at = ? WHERE id = ?');
+    const backfill = db.transaction(() => {
+      for (const row of rows) {
+        let value = row.created_at;
+        try {
+          const mtime = fs.statSync(path.join(__dirname, 'uploads', row.filepath)).mtime;
+          if (mtime.toISOString() < new Date(row.created_at + 'Z').toISOString()) value = mtime.toISOString();
+        } catch (e) { /* file missing — keep created_at */ }
+        setStmt.run(value, row.id);
+      }
+    });
+    backfill();
+    console.log(`[Migration] Backfilled original_created_at for ${rows.length} images`);
   }
 
   // Rebuild FTS index to stay in sync (safe to run every startup — fast on small datasets)

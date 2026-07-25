@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { CircleNotch, Globe, ShareNetwork } from '@phosphor-icons/react'
 import { API_URL, UPLOADS_URL } from '../config'
 import PhotoViewer from './PhotoViewer'
@@ -25,6 +25,119 @@ function useColumnCount(gridSize = 'comfortable') {
     return () => window.removeEventListener('resize', update)
   }, [maxCols])
   return cols
+}
+
+function formatDuration(sec) {
+  if (!sec || !isFinite(sec)) return null
+  const m = Math.floor(sec / 60)
+  const s = Math.round(sec % 60)
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+// Grid card with the same viewport-gated video preview behavior as ImageCard —
+// remote video previews stream from the peer, so only play while visible.
+function FederatedCard({ image, onClick }) {
+  const ref = useRef(null)
+  const videoRef = useRef(null)
+  const [inViewport, setInViewport] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+
+  const isVideo = image.media_type === 'video'
+  const aspectRatio = image.width && image.height ? image.width / image.height : 1
+  const thumbSrc = image.thumbnail_cached && image.thumbnail_path
+    ? `${UPLOADS_URL}/${image.thumbnail_path}`
+    : image.thumb_url || null
+  const videoSrc = image.preview_url || image.full_url
+  const duration = isVideo ? formatDuration(image.duration) : null
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const observer = new IntersectionObserver(
+      ([entry]) => setInViewport(entry.isIntersecting),
+      { rootMargin: '100px' }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    if (inViewport) video.play().catch(() => {})
+    else video.pause()
+  }, [inViewport])
+
+  return (
+    <div
+      ref={ref}
+      className="group relative rounded-2xl overflow-hidden cursor-pointer transition-all duration-300 ease-out hover:scale-[1.02] hover:shadow-2xl hover:shadow-black/40"
+      onClick={() => onClick(image)}
+    >
+      <div className="relative" style={{ paddingBottom: `${(1 / aspectRatio) * 100}%` }}>
+        {isVideo && videoSrc ? (
+          <>
+            {/* Poster — visible until the preview stream is ready */}
+            {thumbSrc && (
+              <img
+                src={thumbSrc}
+                alt=""
+                className={`absolute inset-0 w-full h-full object-cover ${loaded ? 'opacity-0' : 'opacity-100'} transition-opacity duration-300`}
+              />
+            )}
+            {inViewport && (
+              <video
+                ref={videoRef}
+                src={videoSrc}
+                loop
+                muted
+                playsInline
+                preload="none"
+                onLoadedData={() => setLoaded(true)}
+                className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-500 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+              />
+            )}
+          </>
+        ) : thumbSrc ? (
+          <img
+            src={thumbSrc}
+            alt={image.title}
+            className="absolute inset-0 w-full h-full object-cover"
+            loading="lazy"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-bg-card flex items-center justify-center">
+            <Globe className="w-8 h-8 text-text-muted/30" />
+          </div>
+        )}
+
+        {/* Instance badge */}
+        <div className="absolute top-2 left-2 z-10 px-2 py-0.5 bg-black/60 backdrop-blur-md rounded-full flex items-center gap-1">
+          <ShareNetwork className="w-2.5 h-2.5 text-white/70" />
+          <span className="text-[10px] font-medium text-white/80">{image.peer_name}</span>
+        </div>
+
+        {/* Video duration badge — hidden on hover so it never overlaps overlay text */}
+        {duration && (
+          <div className="absolute bottom-2 right-2 z-10 px-1.5 py-0.5 bg-black/60 backdrop-blur-md rounded-md group-hover:opacity-0 transition-opacity duration-200">
+            <span className="text-[10px] font-medium text-white/90">{duration}</span>
+          </div>
+        )}
+
+        {/* Hover overlay */}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
+          <h3 className="text-[14px] font-medium text-white truncate">{image.title}</h3>
+          {image.caption && (
+            <p className="text-[11px] text-white/60 truncate mt-0.5">{image.caption}</p>
+          )}
+          <div className="flex items-center gap-2 mt-1">
+            {image.uploaded_by && <span className="text-[11px] text-white/50">by {image.uploaded_by}</span>}
+            {image.width && image.height && <span className="text-[11px] text-white/40 ml-auto">{image.width}x{image.height}</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export default function FederatedGrid({ gridSize = 'comfortable', authHeaders = {} }) {
@@ -144,53 +257,13 @@ export default function FederatedGrid({ gridSize = 'comfortable', authHeaders = 
       <div className="flex gap-4">
         {columns.map((col, colIdx) => (
           <div key={colIdx} className="flex-1 flex flex-col gap-4">
-            {col.items.map(image => {
-              const aspectRatio = image.width && image.height ? image.width / image.height : 1
-              const thumbSrc = image.thumbnail_cached && image.thumbnail_path
-                ? `${UPLOADS_URL}/${image.thumbnail_path}`
-                : image.thumb_url || null
-
-              return (
-                <div
-                  key={`${image.peer_id}-${image.remote_id}`}
-                  className="group relative rounded-2xl overflow-hidden cursor-pointer transition-all duration-300 ease-out hover:scale-[1.02] hover:shadow-2xl hover:shadow-black/40"
-                  onClick={() => setSelectedImage(image)}
-                >
-                  <div className="relative" style={{ paddingBottom: `${(1 / aspectRatio) * 100}%` }}>
-                    {thumbSrc ? (
-                      <img
-                        src={thumbSrc}
-                        alt={image.title}
-                        className="absolute inset-0 w-full h-full object-cover"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <div className="absolute inset-0 bg-bg-card flex items-center justify-center">
-                        <Globe className="w-8 h-8 text-text-muted/30" />
-                      </div>
-                    )}
-
-                    {/* Instance badge */}
-                    <div className="absolute top-2 left-2 z-10 px-2 py-0.5 bg-black/60 backdrop-blur-md rounded-full flex items-center gap-1">
-                      <ShareNetwork className="w-2.5 h-2.5 text-white/70" />
-                      <span className="text-[10px] font-medium text-white/80">{image.peer_name}</span>
-                    </div>
-
-                    {/* Hover overlay */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
-                      <h3 className="text-[14px] font-medium text-white truncate">{image.title}</h3>
-                      {image.caption && (
-                        <p className="text-[11px] text-white/60 truncate mt-0.5">{image.caption}</p>
-                      )}
-                      <div className="flex items-center gap-2 mt-1">
-                        {image.uploaded_by && <span className="text-[11px] text-white/50">by {image.uploaded_by}</span>}
-                        {image.width && image.height && <span className="text-[11px] text-white/40 ml-auto">{image.width}x{image.height}</span>}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
+            {col.items.map(image => (
+              <FederatedCard
+                key={`${image.peer_id}-${image.remote_id}`}
+                image={image}
+                onClick={setSelectedImage}
+              />
+            ))}
           </div>
         ))}
       </div>

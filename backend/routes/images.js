@@ -264,9 +264,13 @@ async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
   const windowReq = { query: { ...req.query, limit: windowSize, offset: 0 }, user: req.user };
   const result = buildImageQuery(windowReq, conditions, params);
 
-  // media_type is the one filter remote rows can honor cheaply
+  // media_type is the one filter remote rows can honor cheaply. Peer
+  // visibility: global peers for everyone + the caller's personal peers.
+  const uid = req.user?.id ?? -1;
   const mediaType = ['image', 'video'].includes(req.query.media_type) ? req.query.media_type : null;
   const mtSql = mediaType ? 'AND ri.media_type = @mediaType' : '';
+  const ownerSql = '(p.owner_user_id IS NULL OR p.owner_user_id = @uid)';
+  const baseParams = mediaType ? { mediaType, uid } : { uid };
 
   const remoteImages = db.prepare(`
     SELECT ri.remote_id as id, ri.remote_id, ri.id as remote_row_id,
@@ -278,9 +282,9 @@ async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
       ri.video_metadata, ri.duration, ri.file_size, ri.file_hash,
       ri.peer_id, p.name as peer_name, p.url as peer_url
     FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
-    WHERE p.status = 'active' ${mtSql}
+    WHERE p.status = 'active' AND ${ownerSql} ${mtSql}
     ORDER BY ri.remote_created_at DESC LIMIT @windowSize
-  `).all(mediaType ? { mediaType, windowSize } : { windowSize });
+  `).all({ ...baseParams, windowSize });
 
   const enriched = remoteImages.map(img => ({
     ...img,
@@ -309,9 +313,9 @@ async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
     for (const row of db.prepare(`
       SELECT ri.file_hash, MIN(ri.id) as min_id
       FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
-      WHERE p.status = 'active' AND ri.file_hash IN (${ph})
+      WHERE p.status = 'active' AND (p.owner_user_id IS NULL OR p.owner_user_id = ?) AND ri.file_hash IN (${ph})
       GROUP BY ri.file_hash
-    `).all(...hashes)) {
+    `).all(uid, ...hashes)) {
       minRowIdByHash.set(row.file_hash, row.min_id);
     }
   }
@@ -324,7 +328,7 @@ async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
 
   // Live-mode peers: fetched at request time, shaped like synced rows.
   // Dedup by file_hash against local images and the synced remote set.
-  const live = await federationFeed.fetchAllLiveWindows(windowSize);
+  const live = await federationFeed.fetchAllLiveWindows(windowSize, null, uid);
   let liveItems = [];
   let liveTotal = 0;
   const liveCandidates = mediaType ? live.items.filter(i => i.media_type === mediaType) : live.items;
@@ -363,16 +367,16 @@ async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
   const survivingRemote = db.prepare(`
     SELECT COUNT(*) as c
     FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
-    WHERE p.status = 'active' ${mtSql} AND (
+    WHERE p.status = 'active' AND ${ownerSql} ${mtSql} AND (
       ri.file_hash IS NULL OR (
         NOT EXISTS (SELECT 1 FROM images i WHERE i.visibility = 'public' AND i.file_hash = ri.file_hash)
         AND ri.id = (
           SELECT MIN(ri2.id) FROM remote_images ri2 JOIN peers p2 ON ri2.peer_id = p2.id
-          WHERE p2.status = 'active' AND ri2.file_hash = ri.file_hash
+          WHERE p2.status = 'active' AND (p2.owner_user_id IS NULL OR p2.owner_user_id = @uid) AND ri2.file_hash = ri.file_hash
         )
       )
     )
-  `).get(mediaType ? { mediaType } : {});
+  `).get(baseParams);
 
   result.images = merged.slice(offset, offset + limit);
   result.total = result.total + (survivingRemote?.c || 0) + liveTotal;

@@ -15,7 +15,7 @@ const PUBLIC_TABS = [
   { id: 'public', label: 'Public', icon: Globe },
 ]
 
-export default function Header({ onUpload, onImport, galleryTab, onTabChange, searchQuery, onSearchChange, onOpenAdmin, onOpenTheme, onOpenProfile, onOpenShortcuts, onOpenStats, onLogin }) {
+export default function Header({ onUpload, onImport, galleryTab, onTabChange, searchQuery, onSearchChange, onOpenAdmin, onOpenMyNetwork, onOpenTheme, onOpenProfile, onOpenShortcuts, onOpenStats, onLogin }) {
   const { user, logout } = useAuth()
   const [showAddMenu, setShowAddMenu] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
@@ -145,6 +145,9 @@ export default function Header({ onUpload, onImport, galleryTab, onTabChange, se
                       </button>
                       <button onClick={() => { setShowUserMenu(false); onOpenStats?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
                         <ChartBar className="w-4 h-4 text-text-secondary" /> Stats
+                      </button>
+                      <button onClick={() => { setShowUserMenu(false); onOpenMyNetwork?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
+                        <ShareNetwork className="w-4 h-4 text-text-secondary" /> My Network
                       </button>
                       {user.role === 'admin' && (
                         <button onClick={() => { setShowUserMenu(false); onOpenAdmin?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">

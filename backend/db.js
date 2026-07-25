@@ -327,6 +327,37 @@ const initDb = () => {
     console.log('[Migration] collection_images rebuilt with remote_image_id support');
   }
 
+  // Per-user peer lists (feat-federation-user-peers-001): owner_user_id NULL
+  // = global (admin-managed). Rebuild once to drop the table-level UNIQUE(url)
+  // — different users may add the same peer URL independently. FKs are turned
+  // off during the rebuild so remote_images rows don't cascade away.
+  const peersHaveOwner = db.prepare("SELECT 1 AS x FROM pragma_table_info('peers') WHERE name = 'owner_user_id'").get();
+  if (!peersHaveOwner) {
+    db.pragma('foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE peers_v2 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance_id TEXT,
+        name TEXT NOT NULL,
+        url TEXT NOT NULL,
+        status TEXT DEFAULT 'active',
+        mode TEXT DEFAULT 'synced',
+        owner_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        last_synced_at TEXT,
+        image_count INTEGER DEFAULT 0,
+        error TEXT,
+        added_at TEXT DEFAULT (datetime('now'))
+      );
+      INSERT INTO peers_v2 (id, instance_id, name, url, status, mode, last_synced_at, image_count, error, added_at)
+        SELECT id, instance_id, name, url, status, mode, last_synced_at, image_count, error, added_at FROM peers;
+      DROP TABLE peers;
+      ALTER TABLE peers_v2 RENAME TO peers;
+      CREATE INDEX IF NOT EXISTS idx_peers_owner ON peers(owner_user_id);
+    `);
+    db.pragma('foreign_keys = ON');
+    console.log('[Migration] peers rebuilt with per-user owner support');
+  }
+
   // One-time federation rework migration: the hub/relay model is gone.
   // Old installs carry hub-era artifacts (hub_instances table, hub_mode/hub_url
   // settings) — wipe federated state so peers are re-added under the new model.

@@ -487,7 +487,9 @@ function FederationTab({ authHeaders }) {
         const err = await settingsRes.json().catch(() => ({}))
         setLoadError(err.error || `Failed to load federation settings (HTTP ${settingsRes.status})`)
       }
-      if (peersRes.ok) { const d = await peersRes.json(); setPeers(d.peers || []) }
+      // Admin tab manages the instance-wide (global) list; personal peers
+      // live on each user's My Network page
+      if (peersRes.ok) { const d = await peersRes.json(); setPeers((d.peers || []).filter(p => p.scope !== 'mine')) }
     } catch {
       setLoadError('Failed to reach the server')
     }

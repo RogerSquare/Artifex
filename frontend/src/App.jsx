@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Globe, Lock, Trash, X, CheckSquare, Square, Warning, FolderPlus, Check, Columns, CircleNotch, Funnel, GridFour, GridNine, Image } from '@phosphor-icons/react'
 import Header from './components/Header'
+import MyNetwork from './components/MyNetwork'
 import GalleryGrid from './components/GalleryGrid'
 import PhotoViewer from './components/PhotoViewer'
 import UploadZone from './components/UploadZone'
@@ -275,6 +276,7 @@ function App() {
   if (currentPage === 'admin' && user?.role === 'admin') return <ErrorBoundary message="Admin panel encountered an error."><AdminSettings onBack={() => setCurrentPage('gallery')} /></ErrorBoundary>
   if (currentPage === 'stats' && user) return <ErrorBoundary message="Stats failed to load."><StatsDashboard onBack={() => setCurrentPage('gallery')} /></ErrorBoundary>
   if (currentPage === 'theme' && user) return <ErrorBoundary><ThemePage theme={theme} onThemeChange={setTheme} onBack={() => setCurrentPage('gallery')} /></ErrorBoundary>
+  if (currentPage === 'my-network' && user) return <ErrorBoundary message="My Network failed to load."><MyNetwork onBack={() => setCurrentPage('gallery')} /></ErrorBoundary>
   if (currentPage === 'profile' && profileUsername) return <ErrorBoundary message="Profile failed to load."><ProfilePage username={profileUsername} onBack={() => setCurrentPage('gallery')} onSelectImage={handleSelectImage} /></ErrorBoundary>
 
   return (
@@ -289,6 +291,7 @@ function App() {
         onSearchChange={handleSearchChange}
         onOpenProfile={() => navigateToProfile(user.username)}
         onOpenAdmin={() => setCurrentPage('admin')}
+        onOpenMyNetwork={() => setCurrentPage('my-network')}
         onOpenTheme={() => setCurrentPage('theme')}
         onOpenShortcuts={() => setShowShortcuts(true)}
         onOpenStats={() => setCurrentPage('stats')}

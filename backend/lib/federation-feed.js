@@ -86,13 +86,14 @@ async function fetchLiveItems(peer, count, offset = 0) {
 }
 
 /**
- * Fetch the first `count` items from every live-mode peer in parallel
- * (optionally a single peer). Failed peers are skipped.
+ * Fetch the first `count` items from every live-mode peer visible to
+ * `ownerUserId` (global peers + that user's own; null = global only),
+ * in parallel. Failed peers are skipped.
  */
-async function fetchAllLiveWindows(count, peerId = null) {
+async function fetchAllLiveWindows(count, peerId = null, ownerUserId = null) {
   const db = getDb();
-  let sql = "SELECT * FROM peers WHERE mode = 'live' AND status != 'blocked'";
-  const params = [];
+  let sql = "SELECT * FROM peers WHERE mode = 'live' AND status != 'blocked' AND (owner_user_id IS NULL OR owner_user_id = ?)";
+  const params = [ownerUserId ?? -1];
   if (peerId) { sql += ' AND id = ?'; params.push(peerId); }
   const livePeers = db.prepare(sql).all(...params);
   if (livePeers.length === 0) return { items: [], total: 0 };

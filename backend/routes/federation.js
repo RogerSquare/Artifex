@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const { getDb } = require('../db');
-const { requireAuth } = require('../lib/authMiddleware');
+const { requireAuth, optionalAuth } = require('../lib/authMiddleware');
 const federationSync = require('../lib/federation-sync');
 const federationFeed = require('../lib/federation-feed');
 const { remoteMediaUrls } = require('../lib/federation-urls');
@@ -262,7 +262,7 @@ router.get('/media/:id/preview', requireFederation, allowCrossOrigin, (req, res)
 // ─── Admin Endpoints (manage federation settings) ───
 
 // GET /api/federation/settings — get federation settings (admin only)
-router.get('/settings', requireAuth, (req, res) => {
+router.get('/settings', requireAuth, requireAdmin, (req, res) => {
   try {
     res.json({
       instance_id: getSetting('instance_id'),
@@ -277,7 +277,7 @@ router.get('/settings', requireAuth, (req, res) => {
 });
 
 // PUT /api/federation/settings — update federation settings (admin only)
-router.put('/settings', requireAuth, (req, res) => {
+router.put('/settings', requireAuth, requireAdmin, (req, res) => {
   try {
     const { instance_name, instance_description, instance_url, federation_enabled } = req.body;
 
@@ -301,13 +301,30 @@ router.put('/settings', requireAuth, (req, res) => {
   }
 });
 
-// ─── Peer Management (Admin) ───
+// ─── Peer Management ───
+// Global peers (owner_user_id IS NULL) are admin-managed and visible to
+// everyone; personal peers belong to one user and feed only their views.
 
-// GET /api/federation/peers — list all peers
+const MAX_PERSONAL_PEERS = 10;
+
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  next();
+}
+
+// Owner may manage their own peer; admins manage global peers
+function canManagePeer(req, peer) {
+  if (peer.owner_user_id === null) return req.user?.role === 'admin';
+  return peer.owner_user_id === req.user?.id;
+}
+
+// GET /api/federation/peers — global peers + the caller's own, scope-tagged
 router.get('/peers', requireAuth, (req, res) => {
   try {
     const db = getDb();
-    const peers = db.prepare('SELECT * FROM peers ORDER BY added_at DESC').all();
+    const peers = db.prepare(
+      'SELECT * FROM peers WHERE owner_user_id IS NULL OR owner_user_id = ? ORDER BY added_at DESC'
+    ).all(req.user.id).map(p => ({ ...p, scope: p.owner_user_id === null ? 'global' : 'mine' }));
     res.json({ peers });
   } catch (error) {
     res.status(500).json({ error: 'An internal error occurred' });
@@ -319,7 +336,7 @@ router.get('/peers', requireAuth, (req, res) => {
 router.get('/peers/health', requireAuth, async (req, res) => {
   try {
     const db = getDb();
-    const peers = db.prepare('SELECT id, url FROM peers').all();
+    const peers = db.prepare('SELECT id, url FROM peers WHERE owner_user_id IS NULL OR owner_user_id = ?').all(req.user.id);
     const results = await Promise.all(peers.map(async (peer) => {
       const started = Date.now();
       try {
@@ -335,8 +352,8 @@ router.get('/peers/health', requireAuth, async (req, res) => {
   }
 });
 
-// POST /api/federation/peers — add a peer by URL (verifies manifest first)
-router.post('/peers', requireAuth, async (req, res) => {
+// POST /api/federation/peers — add a GLOBAL peer (admin only)
+router.post('/peers', requireAuth, requireAdmin, async (req, res) => {
   try {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'url required' });
@@ -346,8 +363,8 @@ router.post('/peers', requireAuth, async (req, res) => {
 
     const db = getDb();
 
-    // Check if already added
-    const existing = db.prepare('SELECT id FROM peers WHERE url = ?').get(peer.url);
+    // Check if already added globally
+    const existing = db.prepare('SELECT id FROM peers WHERE url = ? AND owner_user_id IS NULL').get(peer.url);
     if (existing) return res.status(409).json({ error: 'Peer already added' });
 
     // Check not adding self
@@ -365,12 +382,50 @@ router.post('/peers', requireAuth, async (req, res) => {
   }
 });
 
+// POST /api/federation/my-peers — add a PERSONAL peer (any user, capped).
+// Content from personal peers appears only in the owner's feeds.
+router.post('/my-peers', requireAuth, async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: 'url required' });
+
+    const db = getDb();
+    const count = db.prepare('SELECT COUNT(*) as c FROM peers WHERE owner_user_id = ?').get(req.user.id).c;
+    if (count >= MAX_PERSONAL_PEERS) {
+      return res.status(400).json({ error: `Personal peer limit reached (${MAX_PERSONAL_PEERS})` });
+    }
+
+    const peer = await federationSync.verifyPeer(url);
+
+    const existing = db.prepare('SELECT id FROM peers WHERE url = ? AND owner_user_id = ?').get(peer.url, req.user.id);
+    if (existing) return res.status(409).json({ error: 'Peer already in your list' });
+
+    const selfId = getSetting('instance_id');
+    if (peer.instance_id === selfId) return res.status(400).json({ error: 'Cannot add yourself as a peer' });
+
+    const info = db.prepare('INSERT INTO peers (instance_id, name, url, owner_user_id) VALUES (?, ?, ?, ?)')
+      .run(peer.instance_id, peer.name, peer.url, req.user.id);
+
+    // Personal peers sync on the shared engine cadence; pull now so content
+    // appears immediately
+    federationSync.syncPeer(info.lastInsertRowid).catch(() => {});
+
+    const audit = require('../lib/audit');
+    audit.fromReq(req, 'user.peer_add', 'peer', info.lastInsertRowid, { url: peer.url, name: peer.name });
+
+    res.status(201).json({ success: true, peer: { id: info.lastInsertRowid, ...peer, scope: 'mine' } });
+  } catch (error) {
+    res.status(400).json({ error: `Failed to verify peer: ${error.message}` });
+  }
+});
+
 // DELETE /api/federation/peers/:id — remove peer and cached content
 router.delete('/peers/:id', requireAuth, (req, res) => {
   try {
     const db = getDb();
     const peer = db.prepare('SELECT * FROM peers WHERE id = ?').get(req.params.id);
     if (!peer) return res.status(404).json({ error: 'Peer not found' });
+    if (!canManagePeer(req, peer)) return res.status(403).json({ error: 'Not your peer' });
 
     // Delete cached thumbnails
     const remoteImages = db.prepare('SELECT thumbnail_path FROM remote_images WHERE peer_id = ? AND thumbnail_cached = 1').all(req.params.id);
@@ -406,6 +461,7 @@ router.put('/peers/:id', requireAuth, (req, res) => {
     const db = getDb();
     const peer = db.prepare('SELECT * FROM peers WHERE id = ?').get(req.params.id);
     if (!peer) return res.status(404).json({ error: 'Peer not found' });
+    if (!canManagePeer(req, peer)) return res.status(403).json({ error: 'Not your peer' });
 
     if (mode === 'live' && peer.mode !== 'live') {
       // Purge cached rows + thumbnail files — live peers store nothing locally.
@@ -441,6 +497,11 @@ router.put('/peers/:id', requireAuth, (req, res) => {
 // POST /api/federation/peers/:id/sync — manually trigger sync for a peer
 router.post('/peers/:id/sync', requireAuth, async (req, res) => {
   try {
+    const db = getDb();
+    const peer = db.prepare('SELECT * FROM peers WHERE id = ?').get(req.params.id);
+    if (!peer) return res.status(404).json({ error: 'Peer not found' });
+    if (!canManagePeer(req, peer)) return res.status(403).json({ error: 'Not your peer' });
+
     const result = await federationSync.syncPeer(parseInt(req.params.id));
     res.json({ success: true, ...result });
   } catch (error) {
@@ -448,8 +509,8 @@ router.post('/peers/:id/sync', requireAuth, async (req, res) => {
   }
 });
 
-// POST /api/federation/sync — sync all peers
-router.post('/sync', requireAuth, async (req, res) => {
+// POST /api/federation/sync — sync all peers (admin only)
+router.post('/sync', requireAuth, requireAdmin, async (req, res) => {
   try {
     await federationSync.syncAll();
     res.json({ success: true });
@@ -458,20 +519,24 @@ router.post('/sync', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/federation/feed — merged feed of remote images from all peers.
-// Synced peers serve from the local cache; live-mode peers are fetched from
-// the peer at request time (absent while the peer is offline).
-router.get('/feed', async (req, res) => {
+// GET /api/federation/feed — merged feed of remote images from all peers
+// visible to the caller: global peers for everyone, plus the caller's own
+// personal peers when authenticated. Synced peers serve from the local
+// cache; live-mode peers are fetched at request time.
+router.get('/feed', optionalAuth, async (req, res) => {
   try {
     const db = getDb();
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
     const peerId = req.query.peer ? parseInt(req.query.peer) : null;
+    const uid = req.user?.id ?? -1;
 
     // A single live-mode peer pages straight through to the peer's API
     if (peerId) {
       const peer = db.prepare('SELECT * FROM peers WHERE id = ?').get(peerId);
-      if (!peer) return res.status(404).json({ error: 'Peer not found' });
+      if (!peer || (peer.owner_user_id !== null && peer.owner_user_id !== uid)) {
+        return res.status(404).json({ error: 'Peer not found' });
+      }
       if (peer.mode === 'live') {
         try {
           const { items, total } = await federationFeed.fetchLiveItems(peer, limit, offset);
@@ -485,8 +550,8 @@ router.get('/feed', async (req, res) => {
     // Merged pagination across sources: first offset+limit rows of each
     // source, merged, then sliced (same approach as /api/images/public)
     const windowSize = offset + limit;
-    let where = "WHERE p.mode != 'live'";
-    const params = {};
+    let where = "WHERE p.mode != 'live' AND (p.owner_user_id IS NULL OR p.owner_user_id = @uid)";
+    const params = { uid };
     if (peerId) { where += ' AND ri.peer_id = @peerId'; params.peerId = peerId; }
 
     const total = db.prepare(`SELECT COUNT(*) as c FROM remote_images ri JOIN peers p ON ri.peer_id = p.id ${where}`).get(params);
@@ -515,7 +580,7 @@ router.get('/feed', async (req, res) => {
       preview_path: undefined,
     }));
 
-    const live = peerId ? { items: [], total: 0 } : await federationFeed.fetchAllLiveWindows(windowSize);
+    const live = peerId ? { items: [], total: 0 } : await federationFeed.fetchAllLiveWindows(windowSize, null, uid);
 
     const merged = [...enriched, ...live.items]
       .sort((a, b) => new Date(b.remote_created_at) - new Date(a.remote_created_at))

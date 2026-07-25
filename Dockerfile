@@ -41,9 +41,13 @@ COPY --from=frontend-build /app/frontend/dist ./public
 RUN mkdir -p uploads/thumbnails models/wd-swinv2-tagger-v3 data
 
 # Environment variables with defaults
+# (JWT_SECRET intentionally not declared here — supply it at runtime via
+#  compose/`docker run -e`; required when NODE_ENV=production)
 ENV NODE_ENV=production
 ENV PORT=3002
-ENV JWT_SECRET=""
+# Keep the DB inside the /app/data volume so plain `docker run` persists it
+# across container replacement (compose also sets this explicitly)
+ENV ARTIFEX_DB_PATH=/app/data/gallery.db
 ENV INSTANCE_NAME="Artifex Gallery"
 ENV FEDERATION_ENABLED=true
 ENV PUBLIC_URL=""

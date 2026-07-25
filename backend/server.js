@@ -157,14 +157,20 @@ app.get('/api/health', (req, res) => {
       walk(UPLOADS_DIR);
     } catch (e) {}
 
-    // Disk free space
+    // Disk free space (wmic on Windows, df elsewhere — incl. Docker/Linux)
     let diskFree = null;
     try {
       const { execSync } = require('child_process');
-      const drive = __dirname.charAt(0);
-      const out = execSync(`wmic logicaldisk where "DeviceID='${drive}:'" get FreeSpace /value`, { encoding: 'utf8' });
-      const match = out.match(/FreeSpace=(\d+)/);
-      if (match) diskFree = parseInt(match[1]);
+      if (process.platform === 'win32') {
+        const drive = __dirname.charAt(0);
+        const out = execSync(`wmic logicaldisk where "DeviceID='${drive}:'" get FreeSpace /value`, { encoding: 'utf8' });
+        const match = out.match(/FreeSpace=(\d+)/);
+        if (match) diskFree = parseInt(match[1]);
+      } else {
+        const out = execSync(`df -kP "${__dirname}"`, { encoding: 'utf8' });
+        const cols = out.trim().split('\n').pop().split(/\s+/);
+        if (cols[3]) diskFree = parseInt(cols[3]) * 1024;
+      }
     } catch (e) {}
 
     // Job queue

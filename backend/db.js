@@ -322,16 +322,21 @@ const initDb = () => {
     console.log('[Migration] Hub/relay removed — federation peers wiped; re-add peer URLs in Admin > Federation');
   }
 
-  // Generate instance ID on first boot
+  // Generate instance ID on first boot. INSTANCE_NAME / PUBLIC_URL /
+  // FEDERATION_ENABLED env vars (Docker/compose) seed the initial values only —
+  // once the DB exists, the admin UI owns these settings and env is ignored.
   const crypto = require('crypto');
   const existing = db.prepare("SELECT value FROM instance_settings WHERE key = 'instance_id'").get();
   if (!existing) {
     const instanceId = crypto.randomUUID();
+    const seedName = process.env.INSTANCE_NAME || 'Artifex Gallery';
+    const seedUrl = process.env.PUBLIC_URL || '';
+    const seedFederation = String(process.env.FEDERATION_ENABLED || 'false').toLowerCase() === 'true' ? 'true' : 'false';
     db.prepare("INSERT INTO instance_settings (key, value) VALUES ('instance_id', ?)").run(instanceId);
-    db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('instance_name', 'Artifex Gallery')").run();
+    db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('instance_name', ?)").run(seedName);
     db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('instance_description', '')").run();
-    db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('instance_url', '')").run();
-    db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('federation_enabled', 'false')").run();
+    db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('instance_url', ?)").run(seedUrl);
+    db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('federation_enabled', ?)").run(seedFederation);
     console.log(`Instance ID generated: ${instanceId}`);
   }
 

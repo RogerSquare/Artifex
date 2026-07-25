@@ -39,6 +39,14 @@ const upload = multer({
   }
 });
 
+// Client-supplied file lastModified (ms epoch) — accepted only if sane
+function parseClientTimestamp(value) {
+  const ms = parseInt(value);
+  if (!Number.isFinite(ms)) return null;
+  if (ms < 946684800000 || ms > Date.now() + 86400000) return null; // 2000-01-01 .. now+1d
+  return new Date(ms).toISOString();
+}
+
 // POST /api/images/upload — single or multiple image upload (auth required)
 router.post('/upload', requireAuth, upload.array('images', 50), async (req, res) => {
   if (!req.files || req.files.length === 0) {
@@ -61,15 +69,17 @@ router.post('/upload', requireAuth, upload.array('images', 50), async (req, res)
   }
   const insertStmt = db.prepare(`
     INSERT INTO images (user_id, filename, original_name, filepath, thumbnail_path, preview_path, analysis_path, title, width, height, file_size, format,
-      has_metadata, metadata_raw, prompt, negative_prompt, model, sampler, steps, cfg_scale, seed, prompt_json, workflow_json, media_type, duration, video_metadata, file_hash)
+      has_metadata, metadata_raw, prompt, negative_prompt, model, sampler, steps, cfg_scale, seed, prompt_json, workflow_json, media_type, duration, video_metadata, file_hash, original_created_at)
     VALUES (@user_id, @filename, @original_name, @filepath, @thumbnail_path, @preview_path, @analysis_path, @title, @width, @height, @file_size, @format,
-      @has_metadata, @metadata_raw, @prompt, @negative_prompt, @model, @sampler, @steps, @cfg_scale, @seed, @prompt_json, @workflow_json, @media_type, @duration, @video_metadata, @file_hash)
+      @has_metadata, @metadata_raw, @prompt, @negative_prompt, @model, @sampler, @steps, @cfg_scale, @seed, @prompt_json, @workflow_json, @media_type, @duration, @video_metadata, @file_hash, @original_created_at)
   `);
 
   const skipDuplicates = req.query.skip_duplicates !== 'false'; // default: skip dupes
+  // Per-file original timestamps sent by the uploader (aligned by index)
+  const lastModified = [].concat(req.body.last_modified || []);
   const results = [];
 
-  for (const file of req.files) {
+  for (const [fileIdx, file] of req.files.entries()) {
     try {
       // Compute SHA-256 hash via stream (non-blocking, doesn't hold entire file in memory)
       const fileHash = await new Promise((resolve, reject) => {
@@ -132,6 +142,7 @@ router.post('/upload', requireAuth, upload.array('images', 50), async (req, res)
         duration: duration || null,
         video_metadata: meta.video_metadata ? JSON.stringify(meta.video_metadata) : null,
         file_hash: fileHash,
+        original_created_at: parseClientTimestamp(lastModified[fileIdx]),
       };
 
       const info = insertStmt.run(record);
@@ -200,11 +211,14 @@ function buildImageQuery(req, extraConditions = [], extraParams = {}, extraJoins
   const countSelect = ', (SELECT COUNT(*) FROM favorites WHERE image_id = i.id) as favorite_count, (SELECT COUNT(*) FROM comments WHERE image_id = i.id) as comment_count';
 
   const total = db.prepare(`SELECT COUNT(*) as count FROM images i ${extraJoins} ${where}`).get(params);
+  // Default sort key: when the file was originally created (falls back to
+  // upload time) — batch imports interleave chronologically instead of
+  // clumping at import date
   const images = db.prepare(
     `SELECT i.id, i.filename, i.original_name, i.filepath, i.thumbnail_path, i.title, i.width, i.height, i.file_size, i.format,
-      i.has_metadata, i.prompt, i.model, i.sampler, i.steps, i.cfg_scale, i.seed, i.created_at, i.user_id, i.visibility, i.media_type, i.duration, i.preview_path, i.file_hash,
+      i.has_metadata, i.prompt, i.model, i.sampler, i.steps, i.cfg_scale, i.seed, i.created_at, i.original_created_at, i.user_id, i.visibility, i.media_type, i.duration, i.preview_path, i.file_hash,
       u.username as uploaded_by ${favSelect} ${countSelect}
-     FROM images i LEFT JOIN users u ON i.user_id = u.id ${favJoin} ${extraJoins} ${where} ORDER BY ${customOrder || `i.created_at ${sort}`} LIMIT @limit OFFSET @offset`
+     FROM images i LEFT JOIN users u ON i.user_id = u.id ${favJoin} ${extraJoins} ${where} ORDER BY ${customOrder || `COALESCE(i.original_created_at, i.created_at) ${sort}`} LIMIT @limit OFFSET @offset`
   ).all({ ...params, limit, offset });
 
   return { total: total.count, limit, offset, images };
@@ -274,7 +288,7 @@ async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
 
   const remoteImages = db.prepare(`
     SELECT ri.remote_id as id, ri.remote_id, ri.id as remote_row_id,
-      ri.title, ri.width, ri.height, ri.format, ri.media_type,
+      ri.title, ri.width, ri.height, ri.format, ri.media_type, ri.original_created_at,
       ri.caption, ri.remote_created_at as created_at, ri.uploaded_by,
       ri.thumbnail_path, ri.thumbnail_cached, ri.tags_json, ri.preview_path,
       ri.prompt, ri.negative_prompt, ri.model, ri.sampler, ri.steps,
@@ -283,7 +297,7 @@ async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
       ri.peer_id, p.name as peer_name, p.url as peer_url
     FROM remote_images ri JOIN peers p ON ri.peer_id = p.id
     WHERE p.status = 'active' AND ${ownerSql} ${mtSql}
-    ORDER BY ri.remote_created_at DESC LIMIT @windowSize
+    ORDER BY COALESCE(ri.original_created_at, ri.remote_created_at) DESC LIMIT @windowSize
   `).all({ ...baseParams, windowSize });
 
   const enriched = remoteImages.map(img => ({
@@ -360,8 +374,9 @@ async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
     liveTotal = mediaType ? liveItems.length : live.total - (live.items.length - liveItems.length);
   }
 
+  const sortDate = (x) => x.original_created_at || x.created_at;
   const merged = [...result.images, ...dedupedRemote, ...liveItems]
-    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    .sort((a, b) => new Date(sortDate(b)) - new Date(sortDate(a)));
 
   // Total = local + remote rows that survive the same dedup rules
   const survivingRemote = db.prepare(`
@@ -904,9 +919,9 @@ router.post('/import', async (req, res) => {
 
   const insertStmt = db.prepare(`
     INSERT INTO images (filename, original_name, filepath, thumbnail_path, title, width, height, file_size, format,
-      has_metadata, metadata_raw, prompt, negative_prompt, model, sampler, steps, cfg_scale, seed, prompt_json, workflow_json)
+      has_metadata, metadata_raw, prompt, negative_prompt, model, sampler, steps, cfg_scale, seed, prompt_json, workflow_json, original_created_at)
     VALUES (@filename, @original_name, @filepath, @thumbnail_path, @title, @width, @height, @file_size, @format,
-      @has_metadata, @metadata_raw, @prompt, @negative_prompt, @model, @sampler, @steps, @cfg_scale, @seed, @prompt_json, @workflow_json)
+      @has_metadata, @metadata_raw, @prompt, @negative_prompt, @model, @sampler, @steps, @cfg_scale, @seed, @prompt_json, @workflow_json, @original_created_at)
   `);
 
   let imported = 0;
@@ -923,6 +938,10 @@ router.post('/import', async (req, res) => {
     }
 
     try {
+      // The source file's mtime is the best evidence of when it was created
+      let originalCreatedAt = null;
+      try { originalCreatedAt = fs.statSync(srcPath).mtime.toISOString(); } catch (e) { /* keep null */ }
+
       // Copy file to uploads directory with unique name
       const ext = path.extname(originalName).toLowerCase();
       const hash = crypto.randomBytes(8).toString('hex');
@@ -963,6 +982,7 @@ router.post('/import', async (req, res) => {
         seed: meta.seed,
         prompt_json: meta.prompt_json,
         workflow_json: meta.workflow_json,
+        original_created_at: originalCreatedAt,
       };
 
       insertStmt.run(record);

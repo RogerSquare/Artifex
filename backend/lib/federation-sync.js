@@ -195,6 +195,28 @@ async function syncPeer(peerId) {
       }
     }
 
+    // Backfill thumbnails that failed to cache on earlier syncs (e.g. the
+    // peer rate-limited a batch mid-download). Incremental syncs never
+    // re-send those images, so retry here — bounded per cycle, still
+    // non-fatal on failure.
+    const uncached = db.prepare(
+      'SELECT remote_id FROM remote_images WHERE peer_id = ? AND (thumbnail_cached = 0 OR thumbnail_path IS NULL) LIMIT 50'
+    ).all(peerId);
+    for (const row of uncached) {
+      try {
+        const thumbFilename = `remote_${peerId}_${row.remote_id}.webp`;
+        const thumbPath = path.join(THUMBNAILS_DIR, thumbFilename);
+        if (!fs.existsSync(thumbPath)) {
+          await downloadFile(`${peer.url}/api/federation/image/${row.remote_id}/thumbnail`, thumbPath);
+        }
+        db.prepare('UPDATE remote_images SET thumbnail_cached = 1, thumbnail_path = ? WHERE peer_id = ? AND remote_id = ?')
+          .run(`thumbnails/${thumbFilename}`, peerId, row.remote_id);
+        cached++;
+      } catch (e) {
+        // Retried again next cycle
+      }
+    }
+
     // Update peer status
     const totalRemote = db.prepare('SELECT COUNT(*) as c FROM remote_images WHERE peer_id = ?').get(peerId);
     db.prepare("UPDATE peers SET last_synced_at = datetime('now'), image_count = ?, status = 'active', error = NULL WHERE id = ?")

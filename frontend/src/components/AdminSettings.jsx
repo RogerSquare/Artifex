@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { ArrowLeft, Users, HardDrives, Image, FilmStrip, Heart, Shield, Trash, ArrowCounterClockwise, Prohibit, Key, CircleNotch, Check, ArrowClockwise, ShareNetwork, Globe, Plus, X } from '@phosphor-icons/react'
 import { API_URL } from '../config'
 import { useAuth } from '../context/AuthContext'
+import usePeerHealth from '../hooks/usePeerHealth'
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -469,6 +470,7 @@ function FederationTab({ authHeaders }) {
   const [adding, setAdding] = useState(false)
   const [syncing, setSyncing] = useState({})
   const [error, setError] = useState('')
+  const peerHealth = usePeerHealth(authHeaders)
 
   const fetchData = useCallback(async () => {
     try {
@@ -605,13 +607,22 @@ function FederationTab({ authHeaders }) {
           </div>
         ) : (
           <div className="space-y-2">
-            {peers.map(peer => (
+            {peers.map(peer => {
+              const live = peerHealth[peer.id]
+              const dotClass = live
+                ? (live.online ? 'bg-green' : 'bg-red')
+                : (peer.status === 'active' ? 'bg-green' : peer.status === 'error' ? 'bg-red' : 'bg-yellow')
+              const dotTitle = live
+                ? (live.online ? `Online (${live.latency_ms}ms)` : 'Offline')
+                : 'Status from last sync'
+              return (
               <div key={peer.id} className="flex items-center gap-3 p-3 bg-bg-elevated rounded-xl">
-                <span className={`w-2 h-2 rounded-full shrink-0 ${peer.status === 'active' ? 'bg-green' : peer.status === 'error' ? 'bg-red' : 'bg-yellow'}`} />
+                <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} title={dotTitle} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-[13px] font-medium text-text truncate">{peer.name}</span>
                     <span className="text-[11px] text-text-muted">{peer.image_count} images</span>
+                    {live && !live.online && <span className="text-[10px] font-medium text-red">offline</span>}
                   </div>
                   <p className="text-[11px] text-text-muted/60 truncate">{peer.url}</p>
                   {peer.error && <p className="text-[10px] text-red truncate">{peer.error}</p>}
@@ -624,7 +635,8 @@ function FederationTab({ authHeaders }) {
                   <Trash className="w-4 h-4" />
                 </button>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

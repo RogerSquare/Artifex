@@ -248,4 +248,4 @@ function stop() {
   }
 }
 
-module.exports = { verifyPeer, syncPeer, syncAll, start, stop };
+module.exports = { verifyPeer, syncPeer, syncAll, start, stop, fetchJson };

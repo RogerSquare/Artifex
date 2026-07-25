@@ -313,6 +313,27 @@ router.get('/peers', requireAuth, (req, res) => {
   }
 });
 
+// GET /api/federation/peers/health — live reachability probe for the status UI.
+// Transient result only; sync status/error columns are untouched.
+router.get('/peers/health', requireAuth, async (req, res) => {
+  try {
+    const db = getDb();
+    const peers = db.prepare('SELECT id, url FROM peers').all();
+    const results = await Promise.all(peers.map(async (peer) => {
+      const started = Date.now();
+      try {
+        await federationSync.fetchJson(`${peer.url}/api/federation/manifest`, 3000);
+        return { id: peer.id, online: true, latency_ms: Date.now() - started };
+      } catch {
+        return { id: peer.id, online: false, latency_ms: null };
+      }
+    }));
+    res.json({ peers: results });
+  } catch (error) {
+    res.status(500).json({ error: 'An internal error occurred' });
+  }
+});
+
 // POST /api/federation/peers — add a peer by URL (verifies manifest first)
 router.post('/peers', requireAuth, async (req, res) => {
   try {

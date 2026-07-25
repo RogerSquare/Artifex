@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { CircleNotch, Globe, ShareNetwork } from '@phosphor-icons/react'
 import { API_URL, UPLOADS_URL } from '../config'
 import PhotoViewer from './PhotoViewer'
+import usePeerHealth from '../hooks/usePeerHealth'
 
 const PAGE_SIZE = 50
 
@@ -34,6 +35,7 @@ export default function FederatedGrid({ gridSize = 'comfortable', authHeaders = 
   const [loadingMore, setLoadingMore] = useState(false)
   const [selectedPeer, setSelectedPeer] = useState(null)
   const [selectedImage, setSelectedImage] = useState(null)
+  const peerHealth = usePeerHealth(authHeaders)
 
   const fetchImages = useCallback(async (offset = 0, append = false) => {
     if (!append) setLoading(true)
@@ -130,7 +132,7 @@ export default function FederatedGrid({ gridSize = 'comfortable', authHeaders = 
               className={`shrink-0 px-3 py-1.5 rounded-full text-[12px] font-medium transition-all duration-200 flex items-center gap-1.5
                 ${selectedPeer === peer.id ? 'bg-accent text-white' : 'bg-white/[0.06] text-text-secondary hover:text-text'}`}
             >
-              <span className={`w-1.5 h-1.5 rounded-full ${peer.status === 'active' ? 'bg-green' : 'bg-red'}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${peerHealth[peer.id] ? (peerHealth[peer.id].online ? 'bg-green' : 'bg-red') : (peer.status === 'active' ? 'bg-green' : 'bg-red')}`} />
               {peer.name}
               <span className="opacity-60">{peer.image_count}</span>
             </button>

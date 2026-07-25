@@ -95,6 +95,7 @@ On image upload:
 - Instance identity in `instance_settings` table (UUID, name, URL)
 - Federation disabled by default — admin enables via settings
 - Simple peer list: admin adds peer URLs (manifest-verified) in `peers` table
+- Per-user peer lists: `peers.owner_user_id` (NULL = global/admin-managed). Personal peers (cap 10, added via `POST /api/federation/my-peers`, managed on the My Network page) feed ONLY their owner's views — every feed query filters `owner_user_id IS NULL OR owner_user_id = <caller>`
 - Full metadata syncs into `remote_images` (prompts, workflow JSON, video metadata, file_hash); media bytes are never mirrored
 - Media loads directly from the source peer in the browser via CORS-enabled endpoints (`/api/federation/media/:id/full|preview`, `/api/federation/image/:id[/thumbnail]`); only `visibility='public'` rows are served
 - Remote images flagged with `is_remote: true` and carry `full_url`/`preview_url`/`thumb_url` in API responses

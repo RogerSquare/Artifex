@@ -6,13 +6,10 @@ import usePeerHealth from '../hooks/usePeerHealth'
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'audit', label: 'Audit Log' },
-  { id: 'jobs', label: 'Job Queue' },
+  { id: 'content', label: 'Content' },
   { id: 'users', label: 'Users' },
-  { id: 'moderation', label: 'Moderation' },
-  { id: 'storage', label: 'Storage' },
+  { id: 'ml', label: 'ML' },
   { id: 'federation', label: 'Federation' },
-  { id: 'system', label: 'System' },
 ]
 
 const formatSize = (bytes) => {
@@ -34,14 +31,12 @@ const ActionBtn = ({ onClick, loading, color = 'accent', children }) => (
 )
 
 // ─── Overview Tab ───
-function OverviewTab({ stats, authHeaders }) {
-  const [jobStats, setJobStats] = useState(null)
-  const [auditRecent, setAuditRecent] = useState([])
+function OverviewTab({ stats }) {
+  const [health, setHealth] = useState(null)
 
   useEffect(() => {
-    fetch(`${API_URL}/tags/jobs/stats`, { headers: authHeaders }).then(r => r.json()).then(setJobStats).catch(() => {})
-    fetch(`${API_URL}/admin/audit?limit=10`, { headers: authHeaders }).then(r => r.json()).then(d => setAuditRecent(d.logs || [])).catch(() => {})
-  }, [authHeaders])
+    fetch(`${API_URL}/health`).then(r => r.json()).then(setHealth).catch(() => {})
+  }, [])
 
   if (!stats) return null
 
@@ -64,43 +59,23 @@ function OverviewTab({ stats, authHeaders }) {
         ))}
       </div>
 
-      {/* Job queue summary */}
-      {jobStats && (
+      {/* System health (was the System tab's readout) */}
+      {health && (
         <div>
-          <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">ML Processing Queue</h3>
-          <div className="grid grid-cols-4 gap-3">
-            {[
-              { label: 'Pending', value: jobStats.pending, color: 'text-yellow' },
-              { label: 'Processing', value: jobStats.processing, color: 'text-accent' },
-              { label: 'Done', value: jobStats.done, color: 'text-green' },
-              { label: 'Failed', value: jobStats.failed, color: 'text-red' },
-            ].map(s => (
-              <div key={s.label} className="bg-bg-card rounded-xl p-3 text-center">
-                <p className={`text-lg font-bold ${s.color}`}>{s.value}</p>
-                <p className="text-[11px] text-text-muted">{s.label}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Recent activity */}
-      {auditRecent.length > 0 && (
-        <div>
-          <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Recent Activity</h3>
-          <div className="bg-bg-card rounded-2xl overflow-hidden divide-y divide-white/[0.04]">
-            {auditRecent.map(log => (
-              <div key={log.id} className="px-4 py-2.5 flex items-center gap-3">
-                <span className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-md shrink-0
-                  ${log.action.includes('delete') || log.action.includes('purge') ? 'bg-red/10 text-red' :
-                    log.action.includes('upload') || log.action.includes('register') ? 'bg-green/10 text-green' :
-                    log.action.includes('login') ? 'bg-accent/10 text-accent' :
-                    'bg-white/[0.06] text-text-muted'}`}
-                >{log.action}</span>
-                <span className="text-[12px] text-text-secondary truncate flex-1">{log.username || 'system'}</span>
-                <span className="text-[11px] text-text-muted shrink-0">{new Date(log.created_at).toLocaleTimeString()}</span>
-              </div>
-            ))}
+          <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">System Health</h3>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-bg-card rounded-xl p-4 text-center">
+              <p className="text-xl font-bold text-green">{Math.floor(health.uptime / 60)}m</p>
+              <p className="text-[11px] text-text-muted mt-1">Uptime</p>
+            </div>
+            <div className="bg-bg-card rounded-xl p-4 text-center">
+              <p className="text-xl font-bold text-text">{health.images}</p>
+              <p className="text-[11px] text-text-muted mt-1">Total Images</p>
+            </div>
+            <div className="bg-bg-card rounded-xl p-4 text-center">
+              <p className="text-xl font-bold text-accent">OK</p>
+              <p className="text-[11px] text-text-muted mt-1">Status</p>
+            </div>
           </div>
         </div>
       )}
@@ -721,13 +696,9 @@ function FederationTab({ authHeaders }) {
   )
 }
 
-function SystemTab({ authHeaders }) {
-  const [health, setHealth] = useState(null)
+// Batch ML operations — composed under the ML tab next to the job queue
+function BatchOpsSection({ authHeaders }) {
   const [loading, setLoading] = useState({})
-
-  useEffect(() => {
-    fetch(`${API_URL}/health`).then(r => r.json()).then(setHealth).catch(() => {})
-  }, [])
 
   const runBatch = async (endpoint, key) => {
     setLoading(prev => ({ ...prev, [key]: true }))
@@ -739,23 +710,6 @@ function SystemTab({ authHeaders }) {
 
   return (
     <div className="space-y-6">
-      {health && (
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-bg-card rounded-xl p-4 text-center">
-            <p className="text-xl font-bold text-green">{Math.floor(health.uptime / 60)}m</p>
-            <p className="text-[11px] text-text-muted mt-1">Uptime</p>
-          </div>
-          <div className="bg-bg-card rounded-xl p-4 text-center">
-            <p className="text-xl font-bold text-text">{health.images}</p>
-            <p className="text-[11px] text-text-muted mt-1">Total Images</p>
-          </div>
-          <div className="bg-bg-card rounded-xl p-4 text-center">
-            <p className="text-xl font-bold text-accent">OK</p>
-            <p className="text-[11px] text-text-muted mt-1">Status</p>
-          </div>
-        </div>
-      )}
-
       <div>
         <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Batch Operations</h3>
         <div className="bg-bg-card rounded-2xl overflow-hidden divide-y divide-white/[0.04]">
@@ -818,14 +772,35 @@ export default function AdminSettings({ onBack }) {
 
       {/* Tab content */}
       <div className="max-w-[1100px] mx-auto px-5 sm:px-8 py-8">
-        {tab === 'overview' && <OverviewTab stats={stats} authHeaders={authHeaders} />}
-        {tab === 'audit' && <AuditTab authHeaders={authHeaders} />}
-        {tab === 'jobs' && <JobsTab authHeaders={authHeaders} />}
+        {tab === 'overview' && (
+          <div className="space-y-8">
+            <OverviewTab stats={stats} />
+            <div>
+              <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Audit Log</h3>
+              <AuditTab authHeaders={authHeaders} />
+            </div>
+          </div>
+        )}
+        {tab === 'content' && (
+          <div className="space-y-8">
+            <div>
+              <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Moderation</h3>
+              <ModerationTab authHeaders={authHeaders} />
+            </div>
+            <div>
+              <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Storage Maintenance</h3>
+              <StorageTab stats={stats} authHeaders={authHeaders} />
+            </div>
+          </div>
+        )}
         {tab === 'users' && <UsersTab authHeaders={authHeaders} currentUser={user} />}
-        {tab === 'moderation' && <ModerationTab authHeaders={authHeaders} />}
-        {tab === 'storage' && <StorageTab stats={stats} authHeaders={authHeaders} />}
+        {tab === 'ml' && (
+          <div className="space-y-8">
+            <JobsTab authHeaders={authHeaders} />
+            <BatchOpsSection authHeaders={authHeaders} />
+          </div>
+        )}
         {tab === 'federation' && <FederationTab authHeaders={authHeaders} />}
-        {tab === 'system' && <SystemTab authHeaders={authHeaders} />}
       </div>
     </div>
   )

@@ -277,7 +277,7 @@ function App() {
   // Reset to gallery after login
   useEffect(() => {
     if (user && currentPage === 'login') setCurrentPage('gallery')
-    if (user && galleryTab === 'public') setGalleryTab('mine')
+    if (user && galleryTab === 'public') setGalleryTab('library')
   }, [user])
 
   if (authLoading) return <div className="min-h-screen bg-bg flex items-center justify-center text-text-muted text-[15px]">Loading...</div>

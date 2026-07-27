@@ -2,7 +2,12 @@ const express = require('express');
 const path = require('path');
 const { getDb } = require('../db');
 const { requireAuth, optionalAuth } = require('../lib/authMiddleware');
-const { applyMetadataTags, applyVisionTags, getImageTags } = require('../lib/tagger');
+const { applyMetadataTags, applyVisionTags, getImageTags, getTaggingSettings } = require('../lib/tagger');
+
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+  next();
+}
 const nsfwDetector = require('../lib/nsfw-detector');
 const jobQueue = require('../lib/job-queue');
 
@@ -31,6 +36,126 @@ router.delete('/jobs/cleanup', requireAuth, (req, res) => {
   const days = parseInt(req.query.days) || 7;
   const cleaned = jobQueue.cleanup(days);
   res.json({ success: true, cleaned });
+});
+
+// GET/PUT /api/tags/settings — tagging knobs (admin): WD threshold + max tags
+router.get('/settings', requireAuth, requireAdmin, (req, res) => {
+  res.json(getTaggingSettings());
+});
+
+router.put('/settings', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const set = db.prepare('INSERT OR REPLACE INTO instance_settings (key, value) VALUES (?, ?)');
+    const threshold = parseFloat(req.body.threshold);
+    const maxTags = parseInt(req.body.max_tags);
+    if (Number.isFinite(threshold)) {
+      if (threshold < 0.05 || threshold > 0.95) return res.status(400).json({ error: 'threshold must be between 0.05 and 0.95' });
+      set.run('tag_threshold', String(threshold));
+    }
+    if (Number.isFinite(maxTags)) {
+      if (maxTags < 1 || maxTags > 100) return res.status(400).json({ error: 'max_tags must be between 1 and 100' });
+      set.run('tag_max_tags', String(maxTags));
+    }
+    res.json({ success: true, ...getTaggingSettings() });
+  } catch (error) {
+    const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });
+  }
+});
+
+// ─── Tag Manager (admin): usage counts, rename/merge, cleanup ───
+
+function mergeTagInto(db, fromId, intoId) {
+  db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, source, confidence) SELECT image_id, ?, source, confidence FROM image_tags WHERE tag_id = ?').run(intoId, fromId);
+  db.prepare('DELETE FROM image_tags WHERE tag_id = ?').run(fromId);
+  db.prepare('DELETE FROM tags WHERE id = ?').run(fromId);
+}
+
+// GET /api/tags/manage — every tag incl. unused ones, with usage counts
+router.get('/manage', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const q = (req.query.q || '').toLowerCase().trim();
+    const tags = db.prepare(`
+      SELECT t.id, t.name, t.category, COUNT(it.image_id) as usage_count
+      FROM tags t LEFT JOIN image_tags it ON t.id = it.tag_id
+      ${q ? 'WHERE t.name LIKE @q' : ''}
+      GROUP BY t.id ORDER BY usage_count DESC, t.name
+      LIMIT 500
+    `).all(q ? { q: `%${q}%` } : {});
+    res.json({ tags });
+  } catch (error) {
+    const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });
+  }
+});
+
+// POST /api/tags/merge — fold one or more tags into another
+router.post('/merge', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const { from_ids, into_id } = req.body;
+    if (!Array.isArray(from_ids) || from_ids.length === 0 || !into_id) {
+      return res.status(400).json({ error: 'from_ids array and into_id required' });
+    }
+    const db = getDb();
+    const target = db.prepare('SELECT id FROM tags WHERE id = ?').get(into_id);
+    if (!target) return res.status(404).json({ error: 'Target tag not found' });
+
+    const run = db.transaction(() => {
+      for (const fromId of from_ids) {
+        if (parseInt(fromId) === parseInt(into_id)) continue;
+        mergeTagInto(db, fromId, into_id);
+      }
+    });
+    run();
+    res.json({ success: true });
+  } catch (error) {
+    const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });
+  }
+});
+
+// DELETE /api/tags/orphans — sweep tags no image uses
+router.delete('/orphans', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    const info = db.prepare('DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM image_tags)').run();
+    res.json({ success: true, removed: info.changes });
+  } catch (error) {
+    const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });
+  }
+});
+
+// PUT /api/tags/:id — rename a tag; merges automatically if the new name exists
+router.put('/:id', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const name = (req.body.name || '').toLowerCase().trim();
+    if (!name) return res.status(400).json({ error: 'name required' });
+
+    const db = getDb();
+    const tag = db.prepare('SELECT * FROM tags WHERE id = ?').get(req.params.id);
+    if (!tag) return res.status(404).json({ error: 'Tag not found' });
+
+    const existing = db.prepare('SELECT id FROM tags WHERE name = ? AND category = ? AND id != ?').get(name, tag.category, tag.id);
+    if (existing) {
+      mergeTagInto(db, tag.id, existing.id);
+      return res.json({ success: true, merged_into: existing.id });
+    }
+    db.prepare('UPDATE tags SET name = ? WHERE id = ?').run(name, tag.id);
+    res.json({ success: true });
+  } catch (error) {
+    const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });
+  }
+});
+
+// DELETE /api/tags/:id — remove a tag everywhere
+router.delete('/:id', requireAuth, requireAdmin, (req, res) => {
+  try {
+    const db = getDb();
+    db.prepare('DELETE FROM image_tags WHERE tag_id = ?').run(req.params.id);
+    const info = db.prepare('DELETE FROM tags WHERE id = ?').run(req.params.id);
+    res.json({ success: true, removed: info.changes });
+  } catch (error) {
+    const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });
+  }
 });
 
 // GET /api/tags — list all tags with image counts, optionally filtered by category
@@ -97,7 +222,7 @@ router.post('/image/:imageId', requireAuth, (req, res) => {
       tag = { id: info.lastInsertRowid };
     }
 
-    db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, source) VALUES (?, ?, ?)').run(
+    db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, source, confidence) VALUES (?, ?, ?, 1.0)').run(
       parseInt(req.params.imageId), tag.id, 'manual'
     );
 
@@ -128,19 +253,28 @@ router.post('/vision/batch', requireAuth, async (req, res) => {
   try {
     const db = getDb();
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+    // ?all=true (admin): re-tag EVERYTHING with current settings — existing
+    // vision tags are cleared per item so stale tags don't linger
+    const retagAll = req.query.all === 'true';
+    if (retagAll && req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
 
-    // Find all media without vision tags (images AND videos)
-    const items = db.prepare(`
-      SELECT i.id, i.filepath, i.thumbnail_path, i.analysis_path, i.media_type FROM images i
-      WHERE i.id NOT IN (SELECT DISTINCT image_id FROM image_tags WHERE source = 'vision')
-      ORDER BY i.created_at DESC LIMIT ?
-    `).all(limit);
+    const items = retagAll
+      ? db.prepare(`
+          SELECT i.id, i.filepath, i.thumbnail_path, i.analysis_path, i.media_type FROM images i
+          ORDER BY i.created_at DESC LIMIT ?
+        `).all(limit)
+      : db.prepare(`
+          SELECT i.id, i.filepath, i.thumbnail_path, i.analysis_path, i.media_type FROM images i
+          WHERE i.id NOT IN (SELECT DISTINCT image_id FROM image_tags WHERE source = 'vision')
+          ORDER BY i.created_at DESC LIMIT ?
+        `).all(limit);
 
     if (items.length === 0) return res.json({ success: true, processed: 0, message: 'All media already tagged' });
 
     let processed = 0;
     for (const item of items) {
       try {
+        if (retagAll) db.prepare("DELETE FROM image_tags WHERE image_id = ? AND source = 'vision'").run(item.id);
         const originalFile = path.join(UPLOADS_DIR, item.filepath);
         const analysisFile = item.analysis_path ? path.join(UPLOADS_DIR, item.analysis_path) : null;
         const thumbFile = item.thumbnail_path ? path.join(UPLOADS_DIR, item.thumbnail_path) : null;

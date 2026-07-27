@@ -144,6 +144,8 @@ const initDb = () => {
   // When the file was originally created (browser lastModified on upload,
   // file mtime on folder import) — the default grid sort key
   addColumnIfMissing('images', 'original_created_at', 'TEXT');
+  // Model confidence per applied tag (1.0 for metadata/manual sources)
+  addColumnIfMissing('image_tags', 'confidence', 'REAL');
 
   // Create indexes (safe to run after migrations)
   db.exec(`

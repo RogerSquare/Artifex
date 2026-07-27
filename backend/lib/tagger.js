@@ -73,7 +73,7 @@ function getOrCreateTagId(db, name, category) {
 function applyMetadataTags(imageId, imageRecord) {
   const db = getDb();
   const tags = extractMetadataTags(imageRecord);
-  const insertStmt = db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, source) VALUES (?, ?, ?)');
+  const insertStmt = db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, source, confidence) VALUES (?, ?, ?, 1.0)');
 
   const applied = [];
   for (const tag of tags) {
@@ -84,6 +84,18 @@ function applyMetadataTags(imageId, imageRecord) {
     }
   }
   return applied;
+}
+
+// Admin-tunable tagging knobs (instance_settings), with the historical defaults
+function getTaggingSettings() {
+  const db = getDb();
+  const get = (k) => db.prepare('SELECT value FROM instance_settings WHERE key = ?').get(k)?.value;
+  const threshold = parseFloat(get('tag_threshold'));
+  const maxTags = parseInt(get('tag_max_tags'));
+  return {
+    threshold: Number.isFinite(threshold) && threshold > 0 && threshold < 1 ? threshold : 0.35,
+    maxTags: Number.isFinite(maxTags) && maxTags > 0 && maxTags <= 100 ? maxTags : 30,
+  };
 }
 
 /**
@@ -110,7 +122,8 @@ async function classifySingleImage(imagePath, imageId = null) {
   try {
     const wdTagger = require('./wd-tagger');
     if (wdTagger.isAvailable()) {
-      const wdTags = await wdTagger.classify(imagePath, { allowNsfw: isExplicit });
+      const { threshold, maxTags } = getTaggingSettings();
+      const wdTags = await wdTagger.classify(imagePath, { allowNsfw: isExplicit, generalThreshold: threshold, maxTags });
       allTags.push(...wdTags);
     }
   } catch (e) {
@@ -226,14 +239,14 @@ async function applyVisionTags(imageId, imagePath, isVideo = false, videoSourceP
     if (!tags || tags.length === 0) return [];
 
     const db = getDb();
-    const insertStmt = db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, source) VALUES (?, ?, ?)');
+    const insertStmt = db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, source, confidence) VALUES (?, ?, ?, ?)');
 
     const applied = [];
     for (const tag of tags) {
       const tagId = getOrCreateTagId(db, tag.name, tag.category);
       if (tagId) {
-        insertStmt.run(imageId, tagId, 'vision');
-        applied.push({ id: tagId, name: tag.name, category: tag.category });
+        insertStmt.run(imageId, tagId, 'vision', Number.isFinite(tag.score) ? Math.round(tag.score * 1000) / 1000 : null);
+        applied.push({ id: tagId, name: tag.name, category: tag.category, confidence: tag.score });
       }
     }
     return applied;
@@ -249,11 +262,11 @@ async function applyVisionTags(imageId, imagePath, isVideo = false, videoSourceP
 function getImageTags(imageId) {
   const db = getDb();
   return db.prepare(`
-    SELECT t.id, t.name, t.category, it.source
+    SELECT t.id, t.name, t.category, it.source, it.confidence
     FROM image_tags it JOIN tags t ON it.tag_id = t.id
     WHERE it.image_id = ?
-    ORDER BY t.category, t.name
+    ORDER BY t.category, COALESCE(it.confidence, 1) DESC, t.name
   `).all(imageId);
 }
 
-module.exports = { applyMetadataTags, applyVisionTags, getImageTags, extractMetadataTags, getOrCreateTagId };
+module.exports = { applyMetadataTags, applyVisionTags, getImageTags, extractMetadataTags, getOrCreateTagId, getTaggingSettings };

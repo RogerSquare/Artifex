@@ -318,9 +318,91 @@ function UsersTab({ authHeaders }) {
   )
 }
 
+// Tag manager — usage counts, rename/merge, cleanup (composed under Content)
+function TagManagerSection({ authHeaders }) {
+  const [tags, setTags] = useState([])
+  const [query, setQuery] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async (q = '') => {
+    try {
+      const res = await fetch(`${API_URL}/tags/manage${q ? `?q=${encodeURIComponent(q)}` : ''}`, { headers: authHeaders })
+      if (res.ok) { const d = await res.json(); setTags(d.tags || []) }
+    } catch { /* ignore */ }
+  }, [authHeaders])
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount
+  useEffect(() => { load() }, [load])
+
+  const rename = async (tag) => {
+    const name = window.prompt(`Rename "${tag.name}" (${tag.category}) to:`, tag.name)
+    if (!name || name.trim().toLowerCase() === tag.name) return
+    await fetch(`${API_URL}/tags/${tag.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ name }) })
+    load(query)
+  }
+
+  const merge = async (tag) => {
+    const targetName = window.prompt(`Merge "${tag.name}" into which tag? (name in category "${tag.category}")`)
+    if (!targetName) return
+    const target = tags.find(t => t.name === targetName.trim().toLowerCase() && t.category === tag.category && t.id !== tag.id)
+    if (!target) { window.alert(`No tag "${targetName}" found in category "${tag.category}" — check the list.`) ; return }
+    await fetch(`${API_URL}/tags/merge`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ from_ids: [tag.id], into_id: target.id }) })
+    load(query)
+  }
+
+  const remove = async (tag) => {
+    if (!window.confirm(`Delete tag "${tag.name}" from all ${tag.usage_count} images?`)) return
+    await fetch(`${API_URL}/tags/${tag.id}`, { method: 'DELETE', headers: authHeaders })
+    load(query)
+  }
+
+  const sweepOrphans = async () => {
+    setBusy(true)
+    try {
+      const res = await fetch(`${API_URL}/tags/orphans`, { method: 'DELETE', headers: authHeaders })
+      const d = await res.json()
+      window.alert(`Removed ${d.removed} unused tags`)
+    } catch { /* ignore */ }
+    setBusy(false)
+    load(query)
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-3">
+        <input
+          type="text" value={query} placeholder="Filter tags..."
+          onChange={e => { setQuery(e.target.value); load(e.target.value) }}
+          className="flex-1 max-w-[240px] h-8 bg-bg-elevated rounded-lg px-3 text-[13px] text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/30"
+        />
+        <div className="flex-1" />
+        <button onClick={sweepOrphans} disabled={busy} className="h-8 px-3 rounded-lg text-[12px] font-medium text-text-secondary hover:text-text bg-white/[0.06] disabled:opacity-40 transition-all">
+          Sweep unused tags
+        </button>
+      </div>
+      <div className="bg-bg-card rounded-2xl overflow-hidden divide-y divide-white/[0.04] max-h-[420px] overflow-y-auto">
+        {tags.length === 0 ? (
+          <p className="text-[13px] text-text-muted text-center py-6">No tags{query ? ' match' : ''}</p>
+        ) : tags.map(tag => (
+          <div key={tag.id} className="px-4 py-2.5 flex items-center gap-3">
+            <span className="text-[13px] text-text truncate">{tag.name}</span>
+            <span className="text-[10px] uppercase text-text-muted bg-white/[0.05] rounded px-1.5 py-0.5 shrink-0">{tag.category}</span>
+            <span className="text-[11px] text-text-muted tabular-nums shrink-0">{tag.usage_count}</span>
+            <div className="flex-1" />
+            <button onClick={() => rename(tag)} className="text-[11px] font-medium text-text-secondary hover:text-accent transition-colors shrink-0">Rename</button>
+            <button onClick={() => merge(tag)} className="text-[11px] font-medium text-text-secondary hover:text-accent transition-colors shrink-0">Merge</button>
+            <button onClick={() => remove(tag)} className="text-[11px] font-medium text-text-secondary hover:text-red transition-colors shrink-0">Delete</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── Content Moderation Tab ───
 function ModerationTab({ authHeaders }) {
   const [flagged, setFlagged] = useState([])
+  const [preview, setPreview] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -346,21 +428,42 @@ function ModerationTab({ authHeaders }) {
       ) : (
         <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
           {flagged.map(img => (
-            <div key={img.id} className="relative group rounded-xl overflow-hidden bg-bg-card aspect-square">
+            <div key={img.id} onClick={() => setPreview(img)} className="relative group rounded-xl overflow-hidden bg-bg-card aspect-square cursor-pointer">
               <img src={`${API_URL.replace('/api', '')}/uploads/${img.thumbnail_path || img.filepath}`} alt="" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                <button onClick={async () => {
-                  await fetch(`${API_URL}/images/${img.id}`, { method: 'DELETE', headers: authHeaders })
-                  setFlagged(prev => prev.filter(i => i.id !== img.id))
-                }} className="p-2 bg-red/80 rounded-lg text-white hover:bg-red transition-colors" title="Delete">
-                  <Trash className="w-4 h-4" />
-                </button>
+              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <span className="text-[11px] font-medium text-white">Click to inspect</span>
               </div>
               <div className="absolute top-1 left-1">
                 <Badge color="red">NSFW</Badge>
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Full-size inspection before any delete decision */}
+      {preview && (
+        <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={() => setPreview(null)}>
+          <div className="flex-1 min-h-0 flex items-center justify-center p-6" onClick={e => e.stopPropagation()}>
+            {preview.media_type === 'video' ? (
+              <video src={`${API_URL.replace('/api', '')}/uploads/${preview.filepath}`} controls autoPlay muted className="max-w-full max-h-full rounded-xl" />
+            ) : (
+              <img src={`${API_URL.replace('/api', '')}/uploads/${preview.filepath}`} alt="" className="max-w-full max-h-full object-contain rounded-xl" />
+            )}
+          </div>
+          <div className="shrink-0 pb-8 flex items-center justify-center gap-3" onClick={e => e.stopPropagation()}>
+            <span className="text-[13px] text-white/60 mr-2 truncate max-w-[240px]">{preview.title || preview.original_name}</span>
+            <button onClick={async () => {
+              await fetch(`${API_URL}/images/${preview.id}`, { method: 'DELETE', headers: authHeaders })
+              setFlagged(prev => prev.filter(i => i.id !== preview.id))
+              setPreview(null)
+            }} className="px-4 py-2 bg-red rounded-lg text-white text-[13px] font-semibold hover:bg-red/80 transition-colors flex items-center gap-2">
+              <Trash className="w-4 h-4" /> Delete
+            </button>
+            <button onClick={() => setPreview(null)} className="px-4 py-2 bg-white/[0.1] rounded-lg text-white text-[13px] font-medium hover:bg-white/[0.2] transition-colors">
+              Keep
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -696,9 +799,57 @@ function FederationTab({ authHeaders }) {
   )
 }
 
+// Tagging knobs (WD threshold + max tags) — composed under the ML tab
+function TaggingSettingsSection({ authHeaders }) {
+  const [settings, setSettings] = useState(null)
+  const [saved, setSaved] = useState(false)
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount
+  useEffect(() => {
+    fetch(`${API_URL}/tags/settings`, { headers: authHeaders }).then(r => r.json()).then(setSettings).catch(() => {})
+  }, [authHeaders])
+
+  const save = async (patch) => {
+    const res = await fetch(`${API_URL}/tags/settings`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify(patch)
+    })
+    if (res.ok) { setSettings(await res.json()); setSaved(true); setTimeout(() => setSaved(false), 1500) }
+  }
+
+  if (!settings) return null
+  return (
+    <div>
+      <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Tagging Settings</h3>
+      <div className="bg-bg-card rounded-2xl p-5 flex flex-wrap items-end gap-5">
+        <div>
+          <label className="block text-[12px] text-text-muted mb-1">Confidence threshold</label>
+          <input
+            type="number" min="0.05" max="0.95" step="0.05" defaultValue={settings.threshold}
+            onBlur={e => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) save({ threshold: v }) }}
+            className="w-24 h-8 bg-bg-elevated rounded-lg px-3 text-[13px] text-text focus:outline-none focus:ring-1 focus:ring-accent/30"
+          />
+          <p className="text-[10px] text-text-muted/60 mt-1">Lower = more tags, noisier. Default 0.35</p>
+        </div>
+        <div>
+          <label className="block text-[12px] text-text-muted mb-1">Max tags per image</label>
+          <input
+            type="number" min="1" max="100" step="1" defaultValue={settings.maxTags}
+            onBlur={e => { const v = parseInt(e.target.value); if (Number.isFinite(v)) save({ max_tags: v }) }}
+            className="w-24 h-8 bg-bg-elevated rounded-lg px-3 text-[13px] text-text focus:outline-none focus:ring-1 focus:ring-accent/30"
+          />
+          <p className="text-[10px] text-text-muted/60 mt-1">Default 30</p>
+        </div>
+        {saved && <span className="text-[12px] text-green pb-2">Saved — applies to new tagging runs</span>}
+      </div>
+    </div>
+  )
+}
+
 // Batch ML operations — composed under the ML tab next to the job queue
 function BatchOpsSection({ authHeaders }) {
   const [loading, setLoading] = useState({})
+  const [retagResult, setRetagResult] = useState(null)
 
   const runBatch = async (endpoint, key) => {
     setLoading(prev => ({ ...prev, [key]: true }))
@@ -706,6 +857,17 @@ function BatchOpsSection({ authHeaders }) {
       await fetch(`${API_URL}/tags/${endpoint}?limit=100`, { method: 'POST', headers: authHeaders })
     } catch {}
     setLoading(prev => ({ ...prev, [key]: false }))
+  }
+
+  const retagEverything = async () => {
+    if (!window.confirm('Re-tag ALL images with the current tagging settings? Existing vision tags are replaced. Runs 100 items per pass — repeat for large libraries.')) return
+    setLoading(prev => ({ ...prev, retag_all: true }))
+    try {
+      const res = await fetch(`${API_URL}/tags/vision/batch?all=true&limit=100`, { method: 'POST', headers: authHeaders })
+      const data = await res.json()
+      setRetagResult(res.ok ? `Re-tagged ${data.processed} items — run again for the next batch` : (data.error || 'Failed'))
+    } catch { setRetagResult('Failed') }
+    setLoading(prev => ({ ...prev, retag_all: false }))
   }
 
   return (
@@ -727,6 +889,14 @@ function BatchOpsSection({ authHeaders }) {
               <ActionBtn onClick={() => runBatch(op.endpoint, op.key)} loading={loading[op.key]}>Run</ActionBtn>
             </div>
           ))}
+          <div className="px-5 py-4 flex items-center justify-between">
+            <div>
+              <p className="text-[14px] font-medium text-text">Re-tag Everything</p>
+              <p className="text-[12px] text-text-secondary mt-0.5">Replace ALL vision tags using the current tagging settings (100 items per pass)</p>
+              {retagResult && <p className="text-[12px] text-accent mt-1">{retagResult}</p>}
+            </div>
+            <ActionBtn onClick={retagEverything} loading={loading.retag_all}>Run</ActionBtn>
+          </div>
         </div>
       </div>
     </div>
@@ -791,12 +961,17 @@ export default function AdminSettings({ onBack }) {
               <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Storage Maintenance</h3>
               <StorageTab stats={stats} authHeaders={authHeaders} />
             </div>
+            <div>
+              <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Tags</h3>
+              <TagManagerSection authHeaders={authHeaders} />
+            </div>
           </div>
         )}
         {tab === 'users' && <UsersTab authHeaders={authHeaders} currentUser={user} />}
         {tab === 'ml' && (
           <div className="space-y-8">
             <JobsTab authHeaders={authHeaders} />
+            <TaggingSettingsSection authHeaders={authHeaders} />
             <BatchOpsSection authHeaders={authHeaders} />
           </div>
         )}

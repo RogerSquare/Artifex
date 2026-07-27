@@ -790,9 +790,9 @@ router.get('/:id', optionalAuth, (req, res) => {
 
     // Add tags
     image.tags = db.prepare(`
-      SELECT t.id, t.name, t.category, it.source
+      SELECT t.id, t.name, t.category, it.source, it.confidence
       FROM image_tags it JOIN tags t ON it.tag_id = t.id
-      WHERE it.image_id = ? ORDER BY t.category, t.name
+      WHERE it.image_id = ? ORDER BY t.category, COALESCE(it.confidence, 1) DESC, t.name
     `).all(req.params.id);
 
     // Add job queue status (pending/processing jobs indicate tagging in progress)

@@ -94,8 +94,8 @@ const PUBLIC_IMAGE_COLUMNS = `
 
 function serializePublicImage(db, img) {
   const tags = db.prepare(`
-    SELECT t.name, t.category FROM image_tags it JOIN tags t ON it.tag_id = t.id
-    WHERE it.image_id = ? ORDER BY t.category, t.name
+    SELECT t.name, t.category, it.source, it.confidence FROM image_tags it JOIN tags t ON it.tag_id = t.id
+    WHERE it.image_id = ? ORDER BY t.category, COALESCE(it.confidence, 1) DESC, t.name
   `).all(img.id);
 
   return {

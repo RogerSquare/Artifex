@@ -434,14 +434,17 @@ router.get('/mine', requireAuth, (req, res) => {
   }
 });
 
-// GET /api/images/favorites — current user's favorited images
+// GET /api/images/favorites — current user's favorited images.
+// Manual drag-order by default; an explicit ?sort= selection switches to
+// date ordering (the UI offers Custom / Newest / Oldest on this tab).
 router.get('/favorites', requireAuth, (req, res) => {
   try {
+    const customOrder = req.query.sort ? null : 'fav_filter.sort_order ASC, fav_filter.created_at DESC';
     res.json(buildImageQuery(req,
       ['fav_filter.id IS NOT NULL'],
       {},
       'INNER JOIN favorites fav_filter ON fav_filter.image_id = i.id AND fav_filter.user_id = ' + req.user.id,
-      'fav_filter.sort_order ASC, fav_filter.created_at DESC'
+      customOrder
     ));
   } catch (error) {
     const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });

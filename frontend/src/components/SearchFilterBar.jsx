@@ -21,7 +21,8 @@ export default function SearchFilterBar({ filters, onFiltersChange, galleryTab, 
 
   const activeCount = [filters.model, filters.sampler, filters.has_metadata !== undefined ? String(filters.has_metadata) : null, filters.media_type, filters.sort, filters.tag].filter(Boolean).length
 
-  if (activeCount === 0 && tags.models.length === 0 && tags.samplers.length === 0) return null
+  // Favorites always shows the bar — its sort control is the Custom/date toggle
+  if (activeCount === 0 && tags.models.length === 0 && tags.samplers.length === 0 && galleryTab !== 'favorites') return null
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -71,14 +72,28 @@ export default function SearchFilterBar({ filters, onFiltersChange, galleryTab, 
         Metadata
       </button>
 
-      <button
-        onClick={() => setFilter('sort', filters.sort === 'oldest' ? undefined : 'oldest')}
-        className={`h-7 px-2.5 rounded-md text-[12px] font-medium flex items-center gap-1.5 transition-all duration-200
-          ${filters.sort === 'oldest' ? 'bg-accent/10 text-accent' : 'bg-white/[0.06] text-text-secondary hover:text-text'}`}
-      >
-        <ArrowsDownUp className="w-3 h-3" />
-        {filters.sort === 'oldest' ? 'Oldest' : 'Newest'}
-      </button>
+      {galleryTab === 'favorites' ? (
+        /* Favorites: custom drag-order is the default; picking a date sort overrides it */
+        <select
+          value={filters.sort || ''}
+          onChange={(e) => setFilter('sort', e.target.value)}
+          className={`h-7 bg-white/[0.06] rounded-md px-2.5 text-[12px] font-medium cursor-pointer focus:outline-none appearance-none transition-all duration-200
+            ${filters.sort ? 'text-accent bg-accent/10' : 'text-text-secondary'}`}
+        >
+          <option value="">Custom Order</option>
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+        </select>
+      ) : (
+        <button
+          onClick={() => setFilter('sort', filters.sort === 'oldest' ? undefined : 'oldest')}
+          className={`h-7 px-2.5 rounded-md text-[12px] font-medium flex items-center gap-1.5 transition-all duration-200
+            ${filters.sort === 'oldest' ? 'bg-accent/10 text-accent' : 'bg-white/[0.06] text-text-secondary hover:text-text'}`}
+        >
+          <ArrowsDownUp className="w-3 h-3" />
+          {filters.sort === 'oldest' ? 'Oldest' : 'Newest'}
+        </button>
+      )}
 
       {filters.tag && (
         <div className="h-7 px-2.5 rounded-md bg-accent/10 text-accent text-[12px] font-medium flex items-center gap-1.5">

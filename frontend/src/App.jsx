@@ -336,10 +336,13 @@ function App() {
 
             {libraryTab === 'favorites' ? (
               <>
-                {/* Reorder controls */}
+                {/* Filters + reorder controls */}
                 <div className="flex items-center gap-2 mb-4">
+                  {!reorderMode && (
+                    <SearchFilterBar filters={filters} onFiltersChange={setFilters} galleryTab="favorites" authHeaders={authHeaders} />
+                  )}
                   <div className="flex-1" />
-                  {user && !selectMode && (
+                  {user && !selectMode && !filters.sort && (
                     reorderMode ? (
                       <>
                         <button onClick={() => { setReorderMode(false); setReorderImageIds(null) }} disabled={reorderSaving} className="px-2.5 h-7 rounded-md text-[13px] font-medium text-text-secondary hover:text-text transition-all duration-200 shrink-0">Cancel</button>

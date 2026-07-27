@@ -6,8 +6,8 @@ import { UPLOADS_URL } from '../config'
 const ALL_TABS = [
   { id: 'all', label: 'All', icon: House },
   { id: 'public', label: 'Public', icon: Globe },
-  { id: 'mine', label: 'Uploads', icon: Image },
   { id: 'library', label: 'Library', icon: BookmarkSimple },
+  { id: 'mine', label: 'Uploads', icon: Image },
   { id: 'network', label: 'Network', icon: ShareNetwork },
 ]
 

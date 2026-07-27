@@ -179,10 +179,12 @@ router.post('/upload', requireAuth, upload.array('images', 50), async (req, res)
   res.status(201).json({ success: true, uploaded, duplicates, failed, images: results });
 });
 
-// Helper to build image queries with common filters
-function buildImageQuery(req, extraConditions = [], extraParams = {}, extraJoins = '', customOrder = null) {
+// Helper to build image queries with common filters. limitCap protects
+// client-facing routes (200); the federated merge passes a higher cap for its
+// internal window, which must grow with scroll depth.
+function buildImageQuery(req, extraConditions = [], extraParams = {}, extraJoins = '', customOrder = null, limitCap = 200) {
   const db = getDb();
-  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+  const limit = Math.min(parseInt(req.query.limit) || 50, limitCap);
   const offset = parseInt(req.query.offset) || 0;
   const sort = req.query.sort === 'oldest' ? 'ASC' : 'DESC';
   const userId = req.user?.id || null;
@@ -271,14 +273,20 @@ function federationActive(req) {
 // query's results. `conditions`/`params` describe the LOCAL slice (public-only
 // for the Public tab; public + own for the All tab) — remote items are public
 // by definition. Used by GET / and GET /public.
+// Deep scrolling grows the merge window; cap it so a hostile offset can't
+// request unbounded work (a 5000-item window is still milliseconds in SQLite)
+const MERGE_WINDOW_MAX = 5000;
+
 async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
   const db = getDb();
   // Merged pagination: page N of a merged sort needs the first offset+limit
   // rows of EACH source, merged, then sliced — applying the same offset to
-  // both sources independently shifts page boundaries.
-  const windowSize = offset + limit;
+  // both sources independently shifts page boundaries. The local window must
+  // bypass buildImageQuery's client-facing 200-row clamp or pages past item
+  // 200 come back empty while total still advertises more.
+  const windowSize = Math.min(offset + limit, MERGE_WINDOW_MAX);
   const windowReq = { query: { ...req.query, limit: windowSize, offset: 0 }, user: req.user };
-  const result = buildImageQuery(windowReq, conditions, params);
+  const result = buildImageQuery(windowReq, conditions, params, '', null, MERGE_WINDOW_MAX);
 
   // media_type is the one filter remote rows can honor cheaply. Peer
   // visibility: global peers for everyone + the caller's personal peers.
@@ -434,14 +442,17 @@ router.get('/mine', requireAuth, (req, res) => {
   }
 });
 
-// GET /api/images/favorites — current user's favorited images
+// GET /api/images/favorites — current user's favorited images.
+// Manual drag-order by default; an explicit ?sort= selection switches to
+// date ordering (the UI offers Custom / Newest / Oldest on this tab).
 router.get('/favorites', requireAuth, (req, res) => {
   try {
+    const customOrder = req.query.sort ? null : 'fav_filter.sort_order ASC, fav_filter.created_at DESC';
     res.json(buildImageQuery(req,
       ['fav_filter.id IS NOT NULL'],
       {},
       'INNER JOIN favorites fav_filter ON fav_filter.image_id = i.id AND fav_filter.user_id = ' + req.user.id,
-      'fav_filter.sort_order ASC, fav_filter.created_at DESC'
+      customOrder
     ));
   } catch (error) {
     const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });

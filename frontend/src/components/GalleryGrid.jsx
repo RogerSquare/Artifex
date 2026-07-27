@@ -40,6 +40,7 @@ export default function GalleryGrid({ filters, galleryTab = 'all', gridSize = 'c
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [exhausted, setExhausted] = useState(false)
   const loaderRef = useRef(null)
 
   const fetchImages = useCallback(async (offset = 0, append = false) => {
@@ -75,6 +76,10 @@ export default function GalleryGrid({ filters, galleryTab = 'all', gridSize = 'c
         const data = await res.json()
         setImages(prev => append ? [...prev, ...data.images] : data.images)
         setTotal(data.total)
+        // An empty page while total says more means the server can't serve
+        // deeper — stop the infinite scroller instead of looping on it
+        if (append) setExhausted(data.images.length === 0)
+        else setExhausted(false)
       }
     } catch { /* ignore */ }
     finally {
@@ -101,7 +106,7 @@ export default function GalleryGrid({ filters, galleryTab = 'all', gridSize = 'c
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && !loadingMore && !loading && images.length < total) {
+        if (entry.isIntersecting && !loadingMore && !loading && !exhausted && images.length < total) {
           fetchImages(images.length, true)
         }
       },
@@ -109,7 +114,7 @@ export default function GalleryGrid({ filters, galleryTab = 'all', gridSize = 'c
     )
     observer.observe(el)
     return () => observer.disconnect()
-  }, [images.length, total, loading, loadingMore, fetchImages])
+  }, [images.length, total, loading, loadingMore, exhausted, fetchImages])
 
   // Wrap favorite toggle to update local images state optimistically
   const handleToggleFavorite = useCallback((imageId) => {
@@ -261,7 +266,7 @@ export default function GalleryGrid({ filters, galleryTab = 'all', gridSize = 'c
       </div>
 
       {/* Infinite scroll trigger */}
-      {images.length < total && (
+      {images.length < total && !exhausted && (
         <div ref={loaderRef} className="flex justify-center py-8">
           {loadingMore && (
             <div className="flex items-center gap-2 text-text-muted">

@@ -56,6 +56,10 @@ function App() {
   const [profileUsername, setProfileUsername] = useState(null)
   const [theme, setTheme] = useState(() => localStorage.getItem('galleryTheme') || 'midnight')
   const [gridSize, setGridSize] = useState(() => localStorage.getItem('galleryGridSize') || 'comfortable')
+  // Favorites keeps its own filters/sort, persisted until the user clears them
+  const [favFilters, setFavFilters] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('galleryFavFilters')) || {} } catch { return {} }
+  })
   const searchDebounce = useRef(null)
 
   // Apply theme to <html> element
@@ -68,6 +72,11 @@ function App() {
   useEffect(() => {
     localStorage.setItem('galleryGridSize', gridSize)
   }, [gridSize])
+
+  useEffect(() => {
+    if (Object.keys(favFilters).length > 0) localStorage.setItem('galleryFavFilters', JSON.stringify(favFilters))
+    else localStorage.removeItem('galleryFavFilters')
+  }, [favFilters])
 
   // Debounced search → filters
   const handleSearchChange = useCallback((value) => {
@@ -268,7 +277,7 @@ function App() {
   // Reset to gallery after login
   useEffect(() => {
     if (user && currentPage === 'login') setCurrentPage('gallery')
-    if (user && galleryTab === 'public') setGalleryTab('mine')
+    if (user && galleryTab === 'public') setGalleryTab('library')
   }, [user])
 
   if (authLoading) return <div className="min-h-screen bg-bg flex items-center justify-center text-text-muted text-[15px]">Loading...</div>
@@ -336,10 +345,20 @@ function App() {
 
             {libraryTab === 'favorites' ? (
               <>
-                {/* Reorder controls */}
+                {/* Filters + reorder controls — favorites filters persist via localStorage */}
                 <div className="flex items-center gap-2 mb-4">
+                  {!reorderMode && (
+                    <>
+                      <SearchFilterBar filters={favFilters} onFiltersChange={setFavFilters} galleryTab="favorites" authHeaders={authHeaders} />
+                      {Object.keys(favFilters).length > 0 && (
+                        <button onClick={() => setFavFilters({})} className="px-2.5 h-7 rounded-md text-[12px] font-medium text-red hover:bg-red/10 transition-all duration-200 shrink-0">
+                          Clear
+                        </button>
+                      )}
+                    </>
+                  )}
                   <div className="flex-1" />
-                  {user && !selectMode && (
+                  {user && !selectMode && !favFilters.sort && (
                     reorderMode ? (
                       <>
                         <button onClick={() => { setReorderMode(false); setReorderImageIds(null) }} disabled={reorderSaving} className="px-2.5 h-7 rounded-md text-[13px] font-medium text-text-secondary hover:text-text transition-all duration-200 shrink-0">Cancel</button>
@@ -362,7 +381,7 @@ function App() {
                 <ErrorBoundary message="Favorites failed to load.">
                   <GalleryGrid
                     key={`${refreshKey}-favorites`}
-                    filters={filters}
+                    filters={favFilters}
                     galleryTab="favorites"
                     gridSize={gridSize}
                     onSelectImage={handleSelectImage}

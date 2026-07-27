@@ -265,6 +265,7 @@
       "get": { "tags": ["Federation"], "summary": "List peers visible to the caller (global + own personal, scope-tagged)", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Peer list with status" } } },
       "post": { "tags": ["Federation"], "summary": "Add a GLOBAL peer by URL (admin only, manifest-verified)", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Peer added" }, "400": { "description": "Invalid or self URL" }, "403": { "description": "Admin only" }, "409": { "description": "Duplicate peer" } } }
     },
+    "/federation/discovery": { "get": { "tags": ["Federation"], "summary": "Browse the configured public directory (proxied; excludes self, marks already-added)", "security": [{ "bearerAuth": [] }], "responses": { "200": { "description": "Directory instances" }, "502": { "description": "Directory unreachable" } } } },
     "/federation/my-peers": {
       "post": { "tags": ["Federation"], "summary": "Add a PERSONAL peer (any user, cap 10; content appears only in the owner's feeds)", "security": [{ "bearerAuth": [] }], "responses": { "201": { "description": "Peer added" }, "400": { "description": "Invalid, self URL, or cap reached" }, "409": { "description": "Already in your list" } } }
     },

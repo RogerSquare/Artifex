@@ -605,6 +605,40 @@ function FederationTab({ authHeaders }) {
         </div>
       </div>
 
+      {/* Discovery */}
+      <div className="bg-bg-card rounded-2xl p-5">
+        <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-4">Discovery</h3>
+        {settings.discovery_enabled && settings.directory_status?.status === 'unreachable' && (
+          <div className="mb-3 px-3 py-2 rounded-lg bg-red/10 text-[12px] text-red">
+            Directory unreachable — {settings.directory_status.last_error || 'no response'}. Listings age out after 24h without a heartbeat.
+          </div>
+        )}
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <span className="text-[13px] text-text">List in public directory</span>
+            <p className="text-[11px] text-text-muted">Other instances can find and add this gallery from the directory's Discovery section</p>
+          </div>
+          <button
+            onClick={() => updateSetting('discovery_enabled', !settings.discovery_enabled)}
+            className={`w-12 h-7 rounded-full transition-all duration-200 ${settings.discovery_enabled ? 'bg-accent' : 'bg-white/[0.1]'}`}
+          >
+            <div className={`w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${settings.discovery_enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+          </button>
+        </div>
+        <div>
+          <label className="block text-[12px] text-text-muted mb-1">Directory URL</label>
+          <input
+            type="text" value={settings.directory_url || ''} placeholder="https://directory.example.com"
+            onChange={e => setSettings(prev => ({ ...prev, directory_url: e.target.value }))}
+            onBlur={e => updateSetting('directory_url', e.target.value)}
+            className="w-full h-8 bg-bg-elevated rounded-lg px-3 text-[13px] text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/30"
+          />
+        </div>
+        {settings.discovery_enabled && settings.directory_status?.status === 'ok' && settings.directory_status.last_success && (
+          <p className="text-[11px] text-green mt-2">Listed — last confirmed {new Date(settings.directory_status.last_success).toLocaleString()}</p>
+        )}
+      </div>
+
       {/* Peers */}
       <div className="bg-bg-card rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">

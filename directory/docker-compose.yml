@@ -1,0 +1,14 @@
+services:
+  artifex-directory:
+    build: .
+    container_name: artifex-directory
+    ports:
+      - "3090:3010"
+    volumes:
+      - directory-data:/app/data
+    environment:
+      - MAX_INSTANCES=${MAX_INSTANCES:-500}
+    restart: unless-stopped
+
+volumes:
+  directory-data:

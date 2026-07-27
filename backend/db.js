@@ -402,6 +402,9 @@ const initDb = () => {
     db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('instance_description', '')").run();
     db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('instance_url', ?)").run(seedUrl);
     db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('federation_enabled', ?)").run(seedFederation);
+    const seedDiscovery = String(process.env.DISCOVERY_ENABLED || 'false').toLowerCase() === 'true' ? 'true' : 'false';
+    db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('discovery_enabled', ?)").run(seedDiscovery);
+    db.prepare("INSERT OR IGNORE INTO instance_settings (key, value) VALUES ('directory_url', ?)").run(process.env.DIRECTORY_URL || '');
     console.log(`Instance ID generated: ${instanceId}`);
   }
 

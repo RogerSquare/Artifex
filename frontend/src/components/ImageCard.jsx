@@ -1,14 +1,17 @@
 import { useState, useRef, useEffect } from 'react'
-import { Sparkle, Lock, Heart, ChatCircle, ShareNetwork } from '@phosphor-icons/react'
+import { Sparkle, Lock, Heart, ChatCircle, ShareNetwork, EyeSlash } from '@phosphor-icons/react'
 import { UPLOADS_URL } from '../config'
 
-export default function ImageCard({ image, onClick, selectable, selected, onToggleSelect, onToggleFavorite, onContextMenu, currentUserId }) {
+export default function ImageCard({ image, onClick, selectable, selected, onToggleSelect, onToggleFavorite, onContextMenu, currentUserId, blurNsfw = false }) {
   const isRemote = !!image.is_remote;
   const isOwner = !isRemote && (!currentUserId || image.user_id === currentUserId);
   // Remote items with a synced local row are selectable (compare, collect);
   // live-mode items (no remote_row_id) and others' local images are not
   const canSelect = selectable && (isOwner || (isRemote && !!image.remote_row_id));
   const selectKey = isRemote ? `r${image.remote_row_id}` : image.id;
+  // Safe mode: NSFW-flagged items blur until deliberately revealed
+  const [nsfwRevealed, setNsfwRevealed] = useState(false);
+  const hideNsfw = blurNsfw && !!image.is_nsfw && !nsfwRevealed;
   const [loaded, setLoaded] = useState(false)
   const [inViewport, setInViewport] = useState(false)
   const ref = useRef(null)
@@ -51,13 +54,20 @@ export default function ImageCard({ image, onClick, selectable, selected, onTogg
   return (
     <div
       ref={ref}
-      onClick={canSelect ? () => onToggleSelect?.(selectKey) : selectable ? undefined : () => onClick(image)}
+      onClick={canSelect ? () => onToggleSelect?.(selectKey) : selectable ? undefined : hideNsfw ? () => setNsfwRevealed(true) : () => onClick(image)}
       onContextMenu={(e) => { if (onContextMenu) { e.preventDefault(); onContextMenu(e, image) } }}
       className={`group relative rounded-2xl overflow-hidden transition-all duration-300 ease-out
         ${selectable && !canSelect ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
         ${selected ? 'ring-2 ring-accent ring-offset-2 ring-offset-bg scale-[0.98]' : selectable && !canSelect ? '' : 'hover:scale-[1.02] hover:shadow-2xl hover:shadow-black/40'}`}
     >
-      <div className="relative" style={{ paddingBottom: `${(1 / aspectRatio) * 100}%` }}>
+      <div className={`relative ${hideNsfw ? 'overflow-hidden' : ''}`} style={{ paddingBottom: `${(1 / aspectRatio) * 100}%` }}>
+        {/* Safe mode veil — first click reveals instead of opening */}
+        {hideNsfw && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-1.5 bg-black/40 backdrop-blur-2xl">
+            <EyeSlash className="w-5 h-5 text-white/70" />
+            <span className="text-[11px] font-medium text-white/80">NSFW — click to view</span>
+          </div>
+        )}
         {/* Video: show poster thumbnail, overlay <video> when in viewport */}
         {isVideo ? (
           <>

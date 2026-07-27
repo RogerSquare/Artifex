@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { CircleNotch, Globe, ShareNetwork } from '@phosphor-icons/react'
+import { CircleNotch, Globe, ShareNetwork, EyeSlash } from '@phosphor-icons/react'
 import { API_URL, UPLOADS_URL } from '../config'
 import PhotoViewer from './PhotoViewer'
 import usePeerHealth from '../hooks/usePeerHealth'
@@ -36,11 +36,13 @@ function formatDuration(sec) {
 
 // Grid card with the same viewport-gated video preview behavior as ImageCard —
 // remote video previews stream from the peer, so only play while visible.
-function FederatedCard({ image, onClick }) {
+function FederatedCard({ image, onClick, blurNsfw = false }) {
   const ref = useRef(null)
   const videoRef = useRef(null)
   const [inViewport, setInViewport] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [nsfwRevealed, setNsfwRevealed] = useState(false)
+  const hideNsfw = blurNsfw && !!image.is_nsfw && !nsfwRevealed
 
   const isVideo = image.media_type === 'video'
   const aspectRatio = image.width && image.height ? image.width / image.height : 1
@@ -72,9 +74,15 @@ function FederatedCard({ image, onClick }) {
     <div
       ref={ref}
       className="group relative rounded-2xl overflow-hidden cursor-pointer transition-all duration-300 ease-out hover:scale-[1.02] hover:shadow-2xl hover:shadow-black/40"
-      onClick={() => onClick(image)}
+      onClick={() => hideNsfw ? setNsfwRevealed(true) : onClick(image)}
     >
       <div className="relative" style={{ paddingBottom: `${(1 / aspectRatio) * 100}%` }}>
+        {hideNsfw && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-1.5 bg-black/40 backdrop-blur-2xl">
+            <EyeSlash className="w-5 h-5 text-white/70" />
+            <span className="text-[11px] font-medium text-white/80">NSFW — click to view</span>
+          </div>
+        )}
         {isVideo && videoSrc ? (
           <>
             {/* Poster — visible until the preview stream is ready */}
@@ -140,7 +148,7 @@ function FederatedCard({ image, onClick }) {
   )
 }
 
-export default function FederatedGrid({ gridSize = 'comfortable', authHeaders = {} }) {
+export default function FederatedGrid({ gridSize = 'comfortable', authHeaders = {}, blurNsfw = false }) {
   const [images, setImages] = useState([])
   const [peers, setPeers] = useState([])
   const [total, setTotal] = useState(0)
@@ -262,6 +270,7 @@ export default function FederatedGrid({ gridSize = 'comfortable', authHeaders = 
                 key={`${image.peer_id}-${image.remote_id}`}
                 image={image}
                 onClick={setSelectedImage}
+                blurNsfw={blurNsfw}
               />
             ))}
           </div>

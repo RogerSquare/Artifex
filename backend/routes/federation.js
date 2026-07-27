@@ -7,6 +7,7 @@ const federationSync = require('../lib/federation-sync');
 const federationFeed = require('../lib/federation-feed');
 const directoryClient = require('../lib/directory-client');
 const { remoteMediaUrls } = require('../lib/federation-urls');
+const { getNsfwTags } = require('../lib/tagger');
 
 const router = express.Router();
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
@@ -614,20 +615,25 @@ router.get('/feed', optionalAuth, async (req, res) => {
 
     // Parse JSON fields, add direct-to-peer media URLs; local cached
     // thumbnail_path stays as the offline fallback
-    const enriched = images.map(img => ({
-      ...img,
-      is_remote: true,
-      remote_row_id: img.id, // ri.* puts the remote_images row id in `id`
-      tags: img.tags_json ? JSON.parse(img.tags_json) : [],
-      metadata: {
-        prompt: img.prompt, model: img.model, sampler: img.sampler,
-        steps: img.steps, cfg_scale: img.cfg_scale, seed: img.seed,
-      },
-      ...remoteMediaUrls(img.peer_url, img),
-      tags_json: undefined,
-      filepath: undefined,
-      preview_path: undefined,
-    }));
+    const nsfwSet = new Set(getNsfwTags());
+    const enriched = images.map(img => {
+      const tags = img.tags_json ? JSON.parse(img.tags_json) : [];
+      return {
+        ...img,
+        is_remote: true,
+        remote_row_id: img.id, // ri.* puts the remote_images row id in `id`
+        tags,
+        is_nsfw: tags.some(t => nsfwSet.has(t.name)),
+        metadata: {
+          prompt: img.prompt, model: img.model, sampler: img.sampler,
+          steps: img.steps, cfg_scale: img.cfg_scale, seed: img.seed,
+        },
+        ...remoteMediaUrls(img.peer_url, img),
+        tags_json: undefined,
+        filepath: undefined,
+        preview_path: undefined,
+      };
+    });
 
     const live = peerId ? { items: [], total: 0 } : await federationFeed.fetchAllLiveWindows(windowSize, null, uid);
 

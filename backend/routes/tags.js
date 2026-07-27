@@ -2,7 +2,7 @@ const express = require('express');
 const path = require('path');
 const { getDb } = require('../db');
 const { requireAuth, optionalAuth } = require('../lib/authMiddleware');
-const { applyMetadataTags, applyVisionTags, getImageTags, getTaggingSettings } = require('../lib/tagger');
+const { applyMetadataTags, applyVisionTags, getImageTags, getTaggingSettings, getNsfwTags } = require('../lib/tagger');
 
 function requireAdmin(req, res, next) {
   if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
@@ -40,7 +40,7 @@ router.delete('/jobs/cleanup', requireAuth, (req, res) => {
 
 // GET/PUT /api/tags/settings — tagging knobs (admin): WD threshold + max tags
 router.get('/settings', requireAuth, requireAdmin, (req, res) => {
-  res.json(getTaggingSettings());
+  res.json({ ...getTaggingSettings(), nsfw_tags: getNsfwTags() });
 });
 
 router.put('/settings', requireAuth, requireAdmin, (req, res) => {
@@ -57,7 +57,12 @@ router.put('/settings', requireAuth, requireAdmin, (req, res) => {
       if (maxTags < 1 || maxTags > 100) return res.status(400).json({ error: 'max_tags must be between 1 and 100' });
       set.run('tag_max_tags', String(maxTags));
     }
-    res.json({ success: true, ...getTaggingSettings() });
+    if (req.body.nsfw_tags !== undefined) {
+      if (!Array.isArray(req.body.nsfw_tags)) return res.status(400).json({ error: 'nsfw_tags must be an array of tag names' });
+      const list = req.body.nsfw_tags.map(t => String(t).toLowerCase().trim()).filter(Boolean).slice(0, 100);
+      set.run('nsfw_tags', JSON.stringify(list));
+    }
+    res.json({ success: true, ...getTaggingSettings(), nsfw_tags: getNsfwTags() });
   } catch (error) {
     const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });
   }

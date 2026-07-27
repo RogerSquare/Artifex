@@ -86,6 +86,21 @@ function applyMetadataTags(imageId, imageRecord) {
   return applied;
 }
 
+// Admin-managed list of tag names that mark content NSFW (matched across
+// categories). Drives both the moderation net and viewer safe-mode blurring.
+const DEFAULT_NSFW_TAGS = ['explicit', 'nsfw', 'questionable'];
+
+function getNsfwTags() {
+  const db = getDb();
+  const raw = db.prepare("SELECT value FROM instance_settings WHERE key = 'nsfw_tags'").get()?.value;
+  if (!raw) return DEFAULT_NSFW_TAGS;
+  try {
+    const list = JSON.parse(raw);
+    if (Array.isArray(list)) return list.map(t => String(t).toLowerCase().trim()).filter(Boolean).slice(0, 100);
+  } catch { /* fall through */ }
+  return DEFAULT_NSFW_TAGS;
+}
+
 // Admin-tunable tagging knobs (instance_settings), with the historical defaults
 function getTaggingSettings() {
   const db = getDb();
@@ -269,4 +284,4 @@ function getImageTags(imageId) {
   `).all(imageId);
 }
 
-module.exports = { applyMetadataTags, applyVisionTags, getImageTags, extractMetadataTags, getOrCreateTagId, getTaggingSettings };
+module.exports = { applyMetadataTags, applyVisionTags, getImageTags, extractMetadataTags, getOrCreateTagId, getTaggingSettings, getNsfwTags };

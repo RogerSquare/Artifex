@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, FolderOpen, UploadSimple, SignOut, MagnifyingGlass, X, Gear, Palette, User, Keyboard, ChartBar, House, Globe, Image, BookmarkSimple, ShareNetwork } from '@phosphor-icons/react'
+import { Plus, FolderOpen, UploadSimple, SignOut, MagnifyingGlass, X, Gear, Palette, User, Keyboard, ChartBar, House, Globe, Image, BookmarkSimple, ShareNetwork, EyeSlash } from '@phosphor-icons/react'
 import { useAuth } from '../context/AuthContext'
 import { UPLOADS_URL } from '../config'
 
@@ -15,7 +15,7 @@ const PUBLIC_TABS = [
   { id: 'public', label: 'Public', icon: Globe },
 ]
 
-export default function Header({ onUpload, onImport, galleryTab, onTabChange, searchQuery, onSearchChange, onOpenAdmin, onOpenMyNetwork, onOpenTheme, onOpenProfile, onOpenShortcuts, onOpenStats, onLogin }) {
+export default function Header({ onUpload, onImport, galleryTab, onTabChange, searchQuery, onSearchChange, onOpenAdmin, onOpenMyNetwork, onOpenTheme, onOpenProfile, onOpenShortcuts, onOpenStats, onLogin, blurNsfw, onToggleBlurNsfw }) {
   const { user, logout } = useAuth()
   const [showAddMenu, setShowAddMenu] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
@@ -148,6 +148,10 @@ export default function Header({ onUpload, onImport, galleryTab, onTabChange, se
                       </button>
                       <button onClick={() => { setShowUserMenu(false); onOpenMyNetwork?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
                         <ShareNetwork className="w-4 h-4 text-text-secondary" /> My Network
+                      </button>
+                      <button onClick={() => onToggleBlurNsfw?.()} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
+                        <EyeSlash className="w-4 h-4 text-text-secondary" /> Blur NSFW
+                        <span className={`ml-auto text-[11px] font-medium ${blurNsfw ? 'text-green' : 'text-text-muted'}`}>{blurNsfw ? 'On' : 'Off'}</span>
                       </button>
                       {user.role === 'admin' && (
                         <button onClick={() => { setShowUserMenu(false); onOpenAdmin?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">

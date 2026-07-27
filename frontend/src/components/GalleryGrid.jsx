@@ -35,7 +35,7 @@ function useColumnCount(gridSize = 'comfortable') {
 
 const PAGE_SIZE = 50
 
-export default function GalleryGrid({ filters, galleryTab = 'all', gridSize = 'comfortable', onSelectImage, onImagesChange, authHeaders = {}, selectable, selectedIds = [], onToggleSelect, onToggleFavorite, onContextMenu, reorderMode, onReorderChange, currentUserId }) {
+export default function GalleryGrid({ filters, galleryTab = 'all', gridSize = 'comfortable', onSelectImage, onImagesChange, authHeaders = {}, selectable, selectedIds = [], onToggleSelect, onToggleFavorite, onContextMenu, reorderMode, onReorderChange, currentUserId, blurNsfw = false }) {
   const [images, setImages] = useState([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -259,6 +259,7 @@ export default function GalleryGrid({ filters, galleryTab = 'all', gridSize = 'c
                 onToggleFavorite={handleToggleFavorite}
                 onContextMenu={onContextMenu}
                 currentUserId={currentUserId}
+                blurNsfw={blurNsfw}
               />
             ))}
           </div>

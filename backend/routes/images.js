@@ -12,6 +12,24 @@ const jobQueue = require('../lib/job-queue');
 const audit = require('../lib/audit');
 const { remoteMediaUrls } = require('../lib/federation-urls');
 const federationFeed = require('../lib/federation-feed');
+const { getNsfwTags } = require('../lib/tagger');
+
+// Build the SQL fragment + params flagging rows that carry any listed NSFW tag
+function nsfwSql(alias = 'i') {
+  const list = getNsfwTags();
+  const params = {};
+  list.forEach((name, idx) => { params[`nsfwTag${idx}`] = name; });
+  const placeholders = list.map((_, idx) => `@nsfwTag${idx}`).join(',');
+  const sql = list.length > 0
+    ? `EXISTS(SELECT 1 FROM image_tags nit JOIN tags nt ON nit.tag_id = nt.id WHERE nit.image_id = ${alias}.id AND nt.name IN (${placeholders}))`
+    : '0';
+  return { sql, params };
+}
+
+const isNsfwByTags = (tags) => {
+  const set = new Set(getNsfwTags());
+  return (tags || []).some(t => set.has(t.name));
+};
 
 const router = express.Router();
 
@@ -218,12 +236,14 @@ function buildImageQuery(req, extraConditions = [], extraParams = {}, extraJoins
   // Default sort key: when the file was originally created (falls back to
   // upload time) — batch imports interleave chronologically instead of
   // clumping at import date
+  const nsfw = nsfwSql('i');
   const images = db.prepare(
     `SELECT i.id, i.filename, i.original_name, i.filepath, i.thumbnail_path, i.title, i.width, i.height, i.file_size, i.format,
       i.has_metadata, i.prompt, i.model, i.sampler, i.steps, i.cfg_scale, i.seed, i.created_at, i.original_created_at, i.user_id, i.visibility, i.media_type, i.duration, i.preview_path, i.file_hash,
+      ${nsfw.sql} as is_nsfw,
       u.username as uploaded_by ${favSelect} ${countSelect}
      FROM images i LEFT JOIN users u ON i.user_id = u.id ${favJoin} ${extraJoins} ${where} ORDER BY ${customOrder || `COALESCE(i.original_created_at, i.created_at) ${sort}`} LIMIT @limit OFFSET @offset`
-  ).all({ ...params, limit, offset });
+  ).all({ ...params, ...nsfw.params, limit, offset });
 
   return { total: total.count, limit, offset, images };
 }
@@ -310,18 +330,22 @@ async function buildFederatedFeed(req, conditions, params, { limit, offset }) {
     ORDER BY COALESCE(ri.original_created_at, ri.remote_created_at) DESC LIMIT @windowSize
   `).all({ ...baseParams, windowSize });
 
-  const enriched = remoteImages.map(img => ({
-    ...img,
-    is_remote: true,
-    visibility: 'public',
-    is_favorited: false,
-    favorite_count: 0,
-    comment_count: 0,
-    tags: img.tags_json ? JSON.parse(img.tags_json) : [],
-    ...remoteMediaUrls(img.peer_url, img),
-    tags_json: undefined,
-    preview_path: undefined,
-  }));
+  const enriched = remoteImages.map(img => {
+    const tags = img.tags_json ? JSON.parse(img.tags_json) : [];
+    return {
+      ...img,
+      is_remote: true,
+      visibility: 'public',
+      is_favorited: false,
+      favorite_count: 0,
+      comment_count: 0,
+      tags,
+      is_nsfw: isNsfwByTags(tags),
+      ...remoteMediaUrls(img.peer_url, img),
+      tags_json: undefined,
+      preview_path: undefined,
+    };
+  });
 
   // Dedup by file_hash: a local copy always wins over a remote one, and
   // among remote copies the earliest-synced row wins. The rules match the
@@ -428,6 +452,29 @@ router.get('/public', async (req, res) => {
     }
 
     res.json(result);
+  } catch (error) {
+    const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });
+  }
+});
+
+// GET /api/images/moderation — every local image matching the NSFW rules,
+// regardless of owner or visibility (admin only). The old approach queried
+// the normal feed with ?tag=explicit, which silently missed other users'
+// private content and ignored the configurable rule list.
+router.get('/moderation', requireAuth, (req, res) => {
+  try {
+    if (req.user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    const db = getDb();
+    const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+    const nsfw = nsfwSql('i');
+    const images = db.prepare(`
+      SELECT i.id, i.title, i.original_name, i.filepath, i.thumbnail_path, i.media_type, i.visibility, i.created_at,
+        u.username as uploaded_by
+      FROM images i LEFT JOIN users u ON i.user_id = u.id
+      WHERE ${nsfw.sql}
+      ORDER BY COALESCE(i.original_created_at, i.created_at) DESC LIMIT @limit
+    `).all({ ...nsfw.params, limit });
+    res.json({ images, total: images.length, rules: getNsfwTags() });
   } catch (error) {
     const logger = require("../lib/logger"); logger.error(error.message, { stack: error.stack, path: req.path }); res.status(500).json({ error: "An internal error occurred" });
   }
@@ -794,6 +841,7 @@ router.get('/:id', optionalAuth, (req, res) => {
       FROM image_tags it JOIN tags t ON it.tag_id = t.id
       WHERE it.image_id = ? ORDER BY t.category, COALESCE(it.confidence, 1) DESC, t.name
     `).all(req.params.id);
+    image.is_nsfw = isNsfwByTags(image.tags);
 
     // Add job queue status (pending/processing jobs indicate tagging in progress)
     const pendingJobs = db.prepare("SELECT type, status FROM jobs WHERE image_id = ? AND status IN ('pending', 'processing')").all(req.params.id);

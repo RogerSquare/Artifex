@@ -318,6 +318,43 @@ function UsersTab({ authHeaders }) {
   )
 }
 
+// NSFW rules — the admin-managed tag list that drives moderation + safe mode
+function NsfwRulesSection({ authHeaders }) {
+  const [value, setValue] = useState(null)
+  const [saved, setSaved] = useState(false)
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount
+  useEffect(() => {
+    fetch(`${API_URL}/tags/settings`, { headers: authHeaders }).then(r => r.json())
+      .then(d => setValue((d.nsfw_tags || []).join(', '))).catch(() => setValue(''))
+  }, [authHeaders])
+
+  const save = async () => {
+    const list = value.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
+    const res = await fetch(`${API_URL}/tags/settings`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ nsfw_tags: list })
+    })
+    if (res.ok) { const d = await res.json(); setValue((d.nsfw_tags || []).join(', ')); setSaved(true); setTimeout(() => setSaved(false), 1500) }
+  }
+
+  if (value === null) return null
+  return (
+    <div className="bg-bg-card rounded-2xl p-5">
+      <p className="text-[12px] text-text-muted mb-2">Any image carrying one of these tags counts as NSFW — it appears in Moderation below and blurs for viewers with safe mode on. Comma-separated tag names, matched across categories.</p>
+      <div className="flex items-center gap-2">
+        <input
+          type="text" value={value} onChange={e => setValue(e.target.value)}
+          onBlur={save} onKeyDown={e => e.key === 'Enter' && save()}
+          placeholder="explicit, nsfw, questionable"
+          className="flex-1 h-8 bg-bg-elevated rounded-lg px-3 text-[13px] text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/30"
+        />
+        {saved && <span className="text-[12px] text-green shrink-0">Saved</span>}
+      </div>
+    </div>
+  )
+}
+
 // Tag manager — usage counts, rename/merge, cleanup (composed under Content)
 function TagManagerSection({ authHeaders }) {
   const [tags, setTags] = useState([])
@@ -408,7 +445,9 @@ function ModerationTab({ authHeaders }) {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API_URL}/images?tag=explicit&limit=50`, { headers: authHeaders })
+        // All local content matching the NSFW rules (detector rating OR
+        // admin-listed tags), regardless of owner/visibility
+        const res = await fetch(`${API_URL}/images/moderation?limit=100`, { headers: authHeaders })
         if (res.ok) { const d = await res.json(); setFlagged(d.images || []) }
       } catch {}
       setLoading(false)
@@ -419,7 +458,7 @@ function ModerationTab({ authHeaders }) {
 
   return (
     <div className="space-y-4">
-      <p className="text-[12px] text-text-muted">{flagged.length} image{flagged.length !== 1 ? 's' : ''} flagged as explicit by NSFW detector</p>
+      <p className="text-[12px] text-text-muted">{flagged.length} item{flagged.length !== 1 ? 's' : ''} matching the NSFW rules (detector rating or listed tags)</p>
       {flagged.length === 0 ? (
         <div className="bg-bg-card rounded-2xl p-8 text-center text-text-muted">
           <Check className="w-8 h-8 mx-auto mb-2 text-green" />
@@ -953,6 +992,10 @@ export default function AdminSettings({ onBack }) {
         )}
         {tab === 'content' && (
           <div className="space-y-8">
+            <div>
+              <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">NSFW Rules</h3>
+              <NsfwRulesSection authHeaders={authHeaders} />
+            </div>
             <div>
               <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Moderation</h3>
               <ModerationTab authHeaders={authHeaders} />

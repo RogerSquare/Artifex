@@ -10,6 +10,7 @@
 const { getDb } = require('../db');
 const { remoteMediaUrls } = require('./federation-urls');
 const federationSync = require('./federation-sync');
+const { getNsfwTags } = require('./tagger');
 
 const LIVE_TIMEOUT_MS = 4000;
 const LIVE_CACHE_TTL_MS = 30000;
@@ -59,6 +60,7 @@ function shapeLiveItem(peer, img) {
     is_remote: true,
     live: true,
     tags: img.tags || [],
+    is_nsfw: (img.tags || []).some(t => new Set(getNsfwTags()).has(t.name)),
     metadata: {
       prompt: img.prompt, model: img.model, sampler: img.sampler,
       steps: img.steps, cfg_scale: img.cfg_scale, seed: img.seed,

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, Users, HardDrives, Image, FilmStrip, Heart, Shield, Trash, ArrowCounterClockwise, Prohibit, Key, CircleNotch, Check, ArrowClockwise, ShareNetwork, Globe, Plus, X } from '@phosphor-icons/react'
+import { ArrowLeft, Users, HardDrives, Image, FilmStrip, Heart, Shield, Trash, ArrowCounterClockwise, Prohibit, Key, CircleNotch, Check, ArrowClockwise, ShareNetwork, Globe, Plus, X, EyeSlash, SquaresFour, List, CaretDown, CaretRight } from '@phosphor-icons/react'
 import { API_URL } from '../config'
 import { useAuth } from '../context/AuthContext'
 import usePeerHealth from '../hooks/usePeerHealth'
@@ -318,48 +318,13 @@ function UsersTab({ authHeaders }) {
   )
 }
 
-// NSFW rules — the admin-managed tag list that drives moderation + safe mode
-function NsfwRulesSection({ authHeaders }) {
-  const [value, setValue] = useState(null)
-  const [saved, setSaved] = useState(false)
-
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount
-  useEffect(() => {
-    fetch(`${API_URL}/tags/settings`, { headers: authHeaders }).then(r => r.json())
-      .then(d => setValue((d.nsfw_tags || []).join(', '))).catch(() => setValue(''))
-  }, [authHeaders])
-
-  const save = async () => {
-    const list = value.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
-    const res = await fetch(`${API_URL}/tags/settings`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders },
-      body: JSON.stringify({ nsfw_tags: list })
-    })
-    if (res.ok) { const d = await res.json(); setValue((d.nsfw_tags || []).join(', ')); setSaved(true); setTimeout(() => setSaved(false), 1500) }
-  }
-
-  if (value === null) return null
-  return (
-    <div className="bg-bg-card rounded-2xl p-5">
-      <p className="text-[12px] text-text-muted mb-2">Any image carrying one of these tags counts as NSFW — it appears in Moderation below and blurs for viewers with safe mode on. Comma-separated tag names, matched across categories.</p>
-      <div className="flex items-center gap-2">
-        <input
-          type="text" value={value} onChange={e => setValue(e.target.value)}
-          onBlur={save} onKeyDown={e => e.key === 'Enter' && save()}
-          placeholder="explicit, nsfw, questionable"
-          className="flex-1 h-8 bg-bg-elevated rounded-lg px-3 text-[13px] text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/30"
-        />
-        {saved && <span className="text-[12px] text-green shrink-0">Saved</span>}
-      </div>
-    </div>
-  )
-}
-
-// Tag manager — usage counts, rename/merge, cleanup (composed under Content)
+// Tag manager — usage counts, rename/merge, cleanup, and per-tag NSFW rule
+// toggles (any tag flipped on counts as NSFW for moderation + safe mode)
 function TagManagerSection({ authHeaders }) {
   const [tags, setTags] = useState([])
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
+  const [nsfwRules, setNsfwRules] = useState([])
 
   const load = useCallback(async (q = '') => {
     try {
@@ -370,6 +335,28 @@ function TagManagerSection({ authHeaders }) {
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount
   useEffect(() => { load() }, [load])
+  useEffect(() => {
+    fetch(`${API_URL}/tags/settings`, { headers: authHeaders }).then(r => r.json())
+      .then(d => setNsfwRules(d.nsfw_tags || [])).catch(() => {})
+  }, [authHeaders])
+
+  const saveRules = async (list) => {
+    setNsfwRules(list)
+    await fetch(`${API_URL}/tags/settings`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ nsfw_tags: list })
+    })
+  }
+
+  const toggleNsfwRule = (name) => {
+    const has = nsfwRules.includes(name)
+    saveRules(has ? nsfwRules.filter(n => n !== name) : [...nsfwRules, name])
+  }
+
+  // Rule names with no matching tag row (e.g. defaults before any image
+  // carries them) — shown as removable chips so they stay visible/editable
+  const tagNames = new Set(tags.map(t => t.name))
+  const detachedRules = nsfwRules.filter(n => !tagNames.has(n))
 
   const rename = async (tag) => {
     const name = window.prompt(`Rename "${tag.name}" (${tag.category}) to:`, tag.name)
@@ -406,22 +393,37 @@ function TagManagerSection({ authHeaders }) {
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-3">
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
         <input
           type="text" value={query} placeholder="Filter tags..."
           onChange={e => { setQuery(e.target.value); load(e.target.value) }}
           className="flex-1 max-w-[240px] h-8 bg-bg-elevated rounded-lg px-3 text-[13px] text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/30"
         />
         <div className="flex-1" />
-        <button onClick={sweepOrphans} disabled={busy} className="h-8 px-3 rounded-lg text-[12px] font-medium text-text-secondary hover:text-text bg-white/[0.06] disabled:opacity-40 transition-all">
+        {/* NSFW rule names that exist only as rules (no tag row yet) */}
+        {detachedRules.map(name => (
+          <span key={name} className="h-7 px-2 rounded-md bg-red/10 text-red text-[11px] font-medium flex items-center gap-1 shrink-0" title="NSFW rule (no tag with this name yet)">
+            <EyeSlash className="w-3 h-3" /> {name}
+            <button onClick={() => toggleNsfwRule(name)} className="hover:text-white transition-colors"><X className="w-3 h-3" /></button>
+          </span>
+        ))}
+        <button onClick={sweepOrphans} disabled={busy} className="h-8 px-3 rounded-lg text-[12px] font-medium text-text-secondary hover:text-text bg-white/[0.06] disabled:opacity-40 transition-all shrink-0">
           Sweep unused tags
         </button>
       </div>
+      <p className="text-[11px] text-text-muted/70 mb-2">The <EyeSlash className="w-3 h-3 inline" /> toggle marks a tag as an NSFW rule — flagged items appear in Moderation and blur for viewers with safe mode on.</p>
       <div className="bg-bg-card rounded-2xl overflow-hidden divide-y divide-white/[0.04] max-h-[420px] overflow-y-auto">
         {tags.length === 0 ? (
           <p className="text-[13px] text-text-muted text-center py-6">No tags{query ? ' match' : ''}</p>
         ) : tags.map(tag => (
           <div key={tag.id} className="px-4 py-2.5 flex items-center gap-3">
+            <button
+              onClick={() => toggleNsfwRule(tag.name)}
+              className={`p-1 rounded-md transition-all shrink-0 ${nsfwRules.includes(tag.name) ? 'text-red bg-red/10' : 'text-text-muted/40 hover:text-text-secondary'}`}
+              title={nsfwRules.includes(tag.name) ? 'NSFW rule — click to remove' : 'Mark as NSFW rule'}
+            >
+              <EyeSlash className="w-3.5 h-3.5" />
+            </button>
             <span className="text-[13px] text-text truncate">{tag.name}</span>
             <span className="text-[10px] uppercase text-text-muted bg-white/[0.05] rounded px-1.5 py-0.5 shrink-0">{tag.category}</span>
             <span className="text-[11px] text-text-muted tabular-nums shrink-0">{tag.usage_count}</span>
@@ -441,6 +443,9 @@ function ModerationTab({ authHeaders }) {
   const [flagged, setFlagged] = useState([])
   const [preview, setPreview] = useState(null)
   const [loading, setLoading] = useState(true)
+  // Collapsed by default — flagged content stays hidden until deliberately opened
+  const [expanded, setExpanded] = useState(false)
+  const [viewMode, setViewMode] = useState('grid')
 
   useEffect(() => {
     (async () => {
@@ -454,31 +459,86 @@ function ModerationTab({ authHeaders }) {
     })()
   }, [authHeaders])
 
+  const remove = async (img) => {
+    if (!window.confirm(`Delete "${img.title || img.original_name}"? This cannot be undone.`)) return
+    await fetch(`${API_URL}/images/${img.id}`, { method: 'DELETE', headers: authHeaders })
+    setFlagged(prev => prev.filter(i => i.id !== img.id))
+  }
+
   if (loading) return <div className="text-center py-8 text-text-muted">Loading...</div>
 
   return (
     <div className="space-y-4">
-      <p className="text-[12px] text-text-muted">{flagged.length} item{flagged.length !== 1 ? 's' : ''} matching the NSFW rules (detector rating or listed tags)</p>
-      {flagged.length === 0 ? (
-        <div className="bg-bg-card rounded-2xl p-8 text-center text-text-muted">
-          <Check className="w-8 h-8 mx-auto mb-2 text-green" />
-          <p className="text-[14px] font-medium">No flagged content</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-          {flagged.map(img => (
-            <div key={img.id} onClick={() => setPreview(img)} className="relative group rounded-xl overflow-hidden bg-bg-card aspect-square cursor-pointer">
-              <img src={`${API_URL.replace('/api', '')}/uploads/${img.thumbnail_path || img.filepath}`} alt="" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                <span className="text-[11px] font-medium text-white">Click to inspect</span>
+      <div className="bg-bg-card rounded-2xl">
+        <button onClick={() => setExpanded(e => !e)} className="w-full px-5 py-4 flex items-center gap-3 text-left">
+          {expanded ? <CaretDown className="w-4 h-4 text-text-muted shrink-0" /> : <CaretRight className="w-4 h-4 text-text-muted shrink-0" />}
+          <div className="flex-1">
+            <p className="text-[14px] font-medium text-text">Flagged content</p>
+            <p className="text-[12px] text-text-secondary mt-0.5">{flagged.length} item{flagged.length !== 1 ? 's' : ''} matching the NSFW rules (detector rating or listed tags) — hidden until expanded</p>
+          </div>
+          {flagged.length > 0 && <Badge color="red">{flagged.length}</Badge>}
+        </button>
+        {expanded && (
+          <div className="px-5 pb-5">
+            {flagged.length === 0 ? (
+              <div className="py-6 text-center text-text-muted">
+                <Check className="w-8 h-8 mx-auto mb-2 text-green" />
+                <p className="text-[14px] font-medium">No flagged content</p>
               </div>
-              <div className="absolute top-1 left-1">
-                <Badge color="red">NSFW</Badge>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ) : (
+              <>
+                <div className="flex items-center justify-end gap-1 mb-3">
+                  <button onClick={() => setViewMode('grid')} title="Grid view"
+                    className={`p-1.5 rounded-lg transition-all ${viewMode === 'grid' ? 'bg-white/[0.08] text-text' : 'text-text-muted hover:text-text-secondary'}`}>
+                    <SquaresFour className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => setViewMode('list')} title="List view"
+                    className={`p-1.5 rounded-lg transition-all ${viewMode === 'list' ? 'bg-white/[0.08] text-text' : 'text-text-muted hover:text-text-secondary'}`}>
+                    <List className="w-4 h-4" />
+                  </button>
+                </div>
+                {viewMode === 'grid' ? (
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                    {flagged.map(img => (
+                      <div key={img.id} onClick={() => setPreview(img)} className="relative group rounded-xl overflow-hidden bg-bg-elevated aspect-square cursor-pointer">
+                        <img src={`${API_URL.replace('/api', '')}/uploads/${img.thumbnail_path || img.filepath}`} alt="" className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <span className="text-[11px] font-medium text-white">Click to inspect</span>
+                        </div>
+                        <div className="absolute top-1 left-1">
+                          <Badge color="red">NSFW</Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-xl overflow-hidden divide-y divide-white/[0.04] bg-bg-elevated">
+                    {flagged.map(img => (
+                      <div key={img.id} className="px-3 py-2 flex items-center gap-3">
+                        <img
+                          src={`${API_URL.replace('/api', '')}/uploads/${img.thumbnail_path || img.filepath}`}
+                          alt="" onClick={() => setPreview(img)}
+                          className="w-10 h-10 rounded-lg object-cover shrink-0 cursor-pointer"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[13px] text-text truncate">{img.title || img.original_name}</p>
+                          <p className="text-[11px] text-text-muted truncate">
+                            {img.uploaded_by} · {img.visibility} · {img.media_type}{img.created_at ? ` · ${new Date(img.created_at).toLocaleDateString()}` : ''}
+                          </p>
+                        </div>
+                        <button onClick={() => setPreview(img)} className="text-[11px] font-medium text-text-secondary hover:text-accent transition-colors shrink-0">Inspect</button>
+                        <button onClick={() => remove(img)} className="text-[11px] font-medium text-text-secondary hover:text-red transition-colors shrink-0 flex items-center gap-1">
+                          <Trash className="w-3.5 h-3.5" /> Delete
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Full-size inspection before any delete decision */}
       {preview && (
@@ -843,7 +903,6 @@ function TaggingSettingsSection({ authHeaders }) {
   const [settings, setSettings] = useState(null)
   const [saved, setSaved] = useState(false)
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount
   useEffect(() => {
     fetch(`${API_URL}/tags/settings`, { headers: authHeaders }).then(r => r.json()).then(setSettings).catch(() => {})
   }, [authHeaders])
@@ -992,10 +1051,6 @@ export default function AdminSettings({ onBack }) {
         )}
         {tab === 'content' && (
           <div className="space-y-8">
-            <div>
-              <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">NSFW Rules</h3>
-              <NsfwRulesSection authHeaders={authHeaders} />
-            </div>
             <div>
               <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Moderation</h3>
               <ModerationTab authHeaders={authHeaders} />

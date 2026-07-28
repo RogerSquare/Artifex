@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Plus, FolderOpen, UploadSimple, SignOut, MagnifyingGlass, X, Gear, Palette, User, Keyboard, ChartBar, House, Globe, Image, BookmarkSimple, ShareNetwork, EyeSlash } from '@phosphor-icons/react'
 import { useAuth } from '../context/AuthContext'
 import { UPLOADS_URL } from '../config'
@@ -20,6 +20,21 @@ export default function Header({ onUpload, onImport, galleryTab, onTabChange, se
   const [showAddMenu, setShowAddMenu] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [showMobileSearch, setShowMobileSearch] = useState(false)
+  const addMenuRef = useRef(null)
+  const userMenuRef = useRef(null)
+
+  // Dismiss dropdowns on any click outside them. A fixed-position backdrop
+  // can't do this here: the header's backdrop-filter makes it the containing
+  // block for fixed descendants, so a "full-screen" catcher only spans the bar.
+  useEffect(() => {
+    if (!showAddMenu && !showUserMenu) return
+    const onPointerDown = (e) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target)) setShowAddMenu(false)
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target)) setShowUserMenu(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [showAddMenu, showUserMenu])
 
   const tabs = user ? ALL_TABS : PUBLIC_TABS
 
@@ -89,7 +104,7 @@ export default function Header({ onUpload, onImport, galleryTab, onTabChange, se
 
             {/* Add button (logged in, desktop + mobile) */}
             {user && (
-              <div className="relative flex items-center">
+              <div ref={addMenuRef} className="relative flex items-center">
                 <button
                   onClick={() => setShowAddMenu(prev => !prev)}
                   className="w-7 h-7 rounded-md bg-accent hover:bg-accent-hover text-white flex items-center justify-center transition-all duration-200"
@@ -98,25 +113,22 @@ export default function Header({ onUpload, onImport, galleryTab, onTabChange, se
                   <Plus className="w-4 h-4" weight="bold" />
                 </button>
                 {showAddMenu && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowAddMenu(false)} />
-                    <div className="absolute right-0 top-full mt-1.5 z-50 w-48 bg-bg-elevated/95 backdrop-blur-xl rounded-xl shadow-2xl shadow-black/40 border border-white/[0.08] overflow-hidden">
-                      <button onClick={() => { setShowAddMenu(false); onUpload() }} className="w-full flex items-center gap-3 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
-                        <UploadSimple className="w-4 h-4 text-text-secondary" /> Upload Images
-                      </button>
-                      <div className="h-px bg-white/[0.06] mx-3" />
-                      <button onClick={() => { setShowAddMenu(false); onImport() }} className="w-full flex items-center gap-3 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
-                        <FolderOpen className="w-4 h-4 text-text-secondary" /> Import Folder
-                      </button>
-                    </div>
-                  </>
+                  <div className="absolute right-0 top-full mt-1.5 z-50 w-48 bg-bg-elevated/95 backdrop-blur-xl rounded-xl shadow-2xl shadow-black/40 border border-white/[0.08] overflow-hidden">
+                    <button onClick={() => { setShowAddMenu(false); onUpload() }} className="w-full flex items-center gap-3 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
+                      <UploadSimple className="w-4 h-4 text-text-secondary" /> Upload Images
+                    </button>
+                    <div className="h-px bg-white/[0.06] mx-3" />
+                    <button onClick={() => { setShowAddMenu(false); onImport() }} className="w-full flex items-center gap-3 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
+                      <FolderOpen className="w-4 h-4 text-text-secondary" /> Import Folder
+                    </button>
+                  </div>
                 )}
               </div>
             )}
 
             {/* User avatar */}
             {user && (
-              <div className="relative ml-0.5 flex items-center">
+              <div ref={userMenuRef} className="relative ml-0.5 flex items-center">
                 <button
                   onClick={() => setShowUserMenu(prev => !prev)}
                   className="w-7 h-7 rounded-full overflow-hidden hover:ring-2 hover:ring-white/20 transition-all duration-200 flex items-center justify-center"
@@ -131,43 +143,40 @@ export default function Header({ onUpload, onImport, galleryTab, onTabChange, se
                   )}
                 </button>
                 {showUserMenu && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
-                    <div className="absolute right-0 top-full mt-1.5 z-50 w-52 bg-bg-elevated/95 backdrop-blur-xl rounded-xl shadow-2xl shadow-black/40 border border-white/[0.08] overflow-hidden">
-                      <div className="px-3.5 py-2.5 border-b border-white/[0.06]">
-                        <p className="text-[13px] font-medium text-text truncate">{user.display_name || user.username}</p>
-                      </div>
-                      <button onClick={() => { setShowUserMenu(false); onOpenProfile?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
-                        <User className="w-4 h-4 text-text-secondary" /> My Profile
-                      </button>
-                      <button onClick={() => { setShowUserMenu(false); onOpenTheme?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
-                        <Palette className="w-4 h-4 text-text-secondary" /> Appearance
-                      </button>
-                      <button onClick={() => { setShowUserMenu(false); onOpenStats?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
-                        <ChartBar className="w-4 h-4 text-text-secondary" /> Stats
-                      </button>
-                      <button onClick={() => { setShowUserMenu(false); onOpenMyNetwork?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
-                        <ShareNetwork className="w-4 h-4 text-text-secondary" /> My Network
-                      </button>
-                      <button onClick={() => onToggleBlurNsfw?.()} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
-                        <EyeSlash className="w-4 h-4 text-text-secondary" /> Blur NSFW
-                        <span className={`ml-auto text-[11px] font-medium ${blurNsfw ? 'text-green' : 'text-text-muted'}`}>{blurNsfw ? 'On' : 'Off'}</span>
-                      </button>
-                      {user.role === 'admin' && (
-                        <button onClick={() => { setShowUserMenu(false); onOpenAdmin?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
-                          <Gear className="w-4 h-4 text-text-secondary" /> Admin Settings
-                        </button>
-                      )}
-                      <button onClick={() => { setShowUserMenu(false); onOpenShortcuts?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
-                        <Keyboard className="w-4 h-4 text-text-secondary" /> Shortcuts
-                        <span className="ml-auto text-[11px] text-text-muted">?</span>
-                      </button>
-                      <div className="h-px bg-white/[0.06] mx-2" />
-                      <button onClick={() => { setShowUserMenu(false); logout() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-red hover:bg-red/10 transition-colors">
-                        <SignOut className="w-3.5 h-3.5" /> Sign Out
-                      </button>
+                  <div className="absolute right-0 top-full mt-1.5 z-50 w-52 bg-bg-elevated/95 backdrop-blur-xl rounded-xl shadow-2xl shadow-black/40 border border-white/[0.08] overflow-hidden">
+                    <div className="px-3.5 py-2.5 border-b border-white/[0.06]">
+                      <p className="text-[13px] font-medium text-text truncate">{user.display_name || user.username}</p>
                     </div>
-                  </>
+                    <button onClick={() => { setShowUserMenu(false); onOpenProfile?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
+                      <User className="w-4 h-4 text-text-secondary" /> My Profile
+                    </button>
+                    <button onClick={() => { setShowUserMenu(false); onOpenTheme?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
+                      <Palette className="w-4 h-4 text-text-secondary" /> Appearance
+                    </button>
+                    <button onClick={() => { setShowUserMenu(false); onOpenStats?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
+                      <ChartBar className="w-4 h-4 text-text-secondary" /> Stats
+                    </button>
+                    <button onClick={() => { setShowUserMenu(false); onOpenMyNetwork?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
+                      <ShareNetwork className="w-4 h-4 text-text-secondary" /> My Network
+                    </button>
+                    <button onClick={() => onToggleBlurNsfw?.()} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
+                      <EyeSlash className="w-4 h-4 text-text-secondary" /> Blur NSFW
+                      <span className={`ml-auto text-[11px] font-medium ${blurNsfw ? 'text-green' : 'text-text-muted'}`}>{blurNsfw ? 'On' : 'Off'}</span>
+                    </button>
+                    {user.role === 'admin' && (
+                      <button onClick={() => { setShowUserMenu(false); onOpenAdmin?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
+                        <Gear className="w-4 h-4 text-text-secondary" /> Admin Settings
+                      </button>
+                    )}
+                    <button onClick={() => { setShowUserMenu(false); onOpenShortcuts?.() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-text hover:bg-white/[0.06] transition-colors">
+                      <Keyboard className="w-4 h-4 text-text-secondary" /> Shortcuts
+                      <span className="ml-auto text-[11px] text-text-muted">?</span>
+                    </button>
+                    <div className="h-px bg-white/[0.06] mx-2" />
+                    <button onClick={() => { setShowUserMenu(false); logout() }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-red hover:bg-red/10 transition-colors">
+                      <SignOut className="w-3.5 h-3.5" /> Sign Out
+                    </button>
+                  </div>
                 )}
               </div>
             )}

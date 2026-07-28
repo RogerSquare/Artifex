@@ -342,7 +342,7 @@ function App() {
               {[{ id: 'favorites', label: 'Favorites' }, { id: 'collections', label: 'Collections' }].map(t => (
                 <button
                   key={t.id}
-                  onClick={() => setLibraryTab(t.id)}
+                  onClick={() => { setLibraryTab(t.id); exitSelectMode() }}
                   className={`px-4 py-1.5 rounded-md text-[13px] font-medium transition-all duration-200
                     ${libraryTab === t.id ? 'bg-white/[0.08] text-text shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}
                 >
@@ -366,6 +366,15 @@ function App() {
                     </>
                   )}
                   <div className="flex-1" />
+                  {user && !reorderMode && (
+                    <button
+                      onClick={toggleSelectMode}
+                      className={`px-2.5 h-7 rounded-md text-[13px] font-medium transition-all duration-200 shrink-0
+                        ${selectMode ? 'text-accent' : 'text-text-secondary hover:text-text'}`}
+                    >
+                      {selectMode ? 'Cancel' : 'Select'}
+                    </button>
+                  )}
                   {user && !selectMode && !favFilters.sort && (
                     reorderMode ? (
                       <>

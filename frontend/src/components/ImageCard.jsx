@@ -24,6 +24,14 @@ export default function ImageCard({ image, onClick, selectable, selected, onTogg
   const videoRef = useRef(null)
 
   const isVideo = image.media_type === 'video'
+
+  // Veiling unmounts the <video>; forget its loaded state so the poster
+  // shows again on unveil instead of a black tile while the fresh
+  // element fetches data
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset tied to the veil unmounting the video
+    if (hideNsfw && isVideo) setLoaded(false)
+  }, [hideNsfw, isVideo])
   // Remote rows: locally cached thumbnail first (works when the peer is
   // offline), direct peer thumb as fallback; previews/originals always direct
   const thumbSrc = image.thumbnail_path
@@ -46,16 +54,19 @@ export default function ImageCard({ image, onClick, selectable, selected, onTogg
     return () => observer.disconnect()
   }, [])
 
-  // Control video playback based on viewport
+  // Control video playback based on viewport. hideNsfw is a dependency
+  // because the <video> mounts only after the veil drops — without it the
+  // effect never fires for the freshly mounted element and, with
+  // preload="none", the video never loads (black tile)
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    if (inViewport) {
+    if (inViewport && !hideNsfw) {
       video.play().catch(() => {})
     } else {
       video.pause()
     }
-  }, [inViewport])
+  }, [inViewport, hideNsfw])
 
   return (
     <div

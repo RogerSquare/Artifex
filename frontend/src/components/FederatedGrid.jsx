@@ -51,6 +51,15 @@ function FederatedCard({ image, onClick, blurNsfw = false }) {
   }, [blurNsfw])
 
   const isVideo = image.media_type === 'video'
+
+  // Veiling unmounts the <video>; forget its loaded state so the poster
+  // shows again on unveil instead of a black tile while the fresh
+  // element fetches data
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset tied to the veil unmounting the video
+    if (hideNsfw && isVideo) setLoaded(false)
+  }, [hideNsfw, isVideo])
+
   const aspectRatio = image.width && image.height ? image.width / image.height : 1
   const thumbSrc = image.thumbnail_cached && image.thumbnail_path
     ? `${UPLOADS_URL}/${image.thumbnail_path}`
@@ -69,12 +78,15 @@ function FederatedCard({ image, onClick, blurNsfw = false }) {
     return () => observer.disconnect()
   }, [])
 
+  // hideNsfw is a dependency because the <video> mounts only after the
+  // veil drops — without it the effect never fires for the fresh element
+  // and, with preload="none", the video never loads (black tile)
   useEffect(() => {
     const video = videoRef.current
     if (!video) return
-    if (inViewport) video.play().catch(() => {})
+    if (inViewport && !hideNsfw) video.play().catch(() => {})
     else video.pause()
-  }, [inViewport])
+  }, [inViewport, hideNsfw])
 
   return (
     <div

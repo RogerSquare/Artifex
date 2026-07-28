@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { X, CaretLeft, CaretRight, MagnifyingGlassPlus, MagnifyingGlassMinus, ArrowsOut, DownloadSimple, Trash, Lock, Globe, ShareNetwork, Check, Heart, Info, FolderPlus } from '@phosphor-icons/react'
+import { X, CaretLeft, CaretRight, CaretDown, MagnifyingGlassPlus, MagnifyingGlassMinus, ArrowsOut, DownloadSimple, Trash, Lock, Globe, ShareNetwork, Check, Heart, Info, FolderPlus } from '@phosphor-icons/react'
 import { UPLOADS_URL, API_URL } from '../config'
 import { useAuth } from '../context/AuthContext'
 import MetadataPanel from './MetadataPanel'
@@ -242,6 +242,16 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
             </div>
           )}
 
+          {/* Small screens: reopen the minimized details sheet */}
+          {!showInfo && (
+            <button
+              onClick={() => setShowInfo(true)}
+              className="md:hidden absolute bottom-4 left-1/2 -translate-x-1/2 z-10 px-3.5 py-2 rounded-full bg-black/60 backdrop-blur-md text-[12px] font-medium text-white/80 hover:text-white flex items-center gap-1.5 transition-colors"
+            >
+              <Info className="w-3.5 h-3.5" /> Details
+            </button>
+          )}
+
           {/* Image */}
           {image.media_type === 'video' && !peerOffline ? (
             /* Video player — autoplay, loop, with controls */
@@ -278,12 +288,21 @@ export default function PhotoViewer({ image, images, onClose, onNavigate, onDele
         </div>
       </div>
 
-      {/* Sidebar — Details panel */}
+      {/* Details panel — side panel on desktop, minimizable bottom sheet on
+          small screens so metadata never traps the media out of view */}
       {showInfo && (
-        <div className="w-[340px] shrink-0 bg-bg-card border-l border-white/[0.04] overflow-y-auto hidden sm:flex flex-col">
-          {/* Panel header — matches toolbar row 1 */}
+        <div className="fixed inset-x-0 bottom-0 z-20 max-h-[55vh] rounded-t-2xl border-t border-white/[0.08] shadow-2xl shadow-black/60 md:static md:z-auto md:max-h-none md:w-[340px] md:shrink-0 md:rounded-none md:border-t-0 md:border-l md:border-white/[0.04] md:shadow-none bg-bg-card flex flex-col overflow-hidden">
+          {/* Panel header — matches toolbar row 1; minimize on small screens */}
           <div className="h-11 flex items-center px-5 border-b border-white/[0.04] shrink-0">
             <h2 className="text-[14px] font-semibold text-text">Details</h2>
+            <div className="flex-1" />
+            <button
+              onClick={() => setShowInfo(false)}
+              className="md:hidden p-1.5 -mr-1.5 rounded-md text-text-secondary hover:text-text hover:bg-white/[0.06] transition-all duration-200"
+              title="Minimize details"
+            >
+              <CaretDown className="w-4 h-4" />
+            </button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-5 space-y-4">

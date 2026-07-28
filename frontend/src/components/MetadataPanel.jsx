@@ -108,10 +108,11 @@ export default function MetadataPanel({ image, onTagFilter }) {
                 key={tag.id}
                 onClick={() => onTagFilter?.(tag.name)}
                 className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium transition-all duration-200 hover:scale-105
+                  ${tag.confidence != null && tag.confidence < 0.5 ? 'opacity-55 hover:opacity-100' : ''}
                   ${tag.source === 'vision' ? 'bg-accent/15 text-accent hover:bg-accent/25' :
                     tag.source === 'manual' ? 'bg-green/15 text-green hover:bg-green/25' :
                     'bg-white/[0.08] text-text-secondary hover:bg-white/[0.12] hover:text-text'}`}
-                title={`${tag.category} · ${tag.source}`}
+                title={`${tag.category} · ${tag.source}${tag.confidence != null ? ` · ${Math.round(tag.confidence * 100)}%` : ''}`}
               >
                 {tag.source === 'vision' && <Eye className="w-2.5 h-2.5" />}
                 {tag.name}

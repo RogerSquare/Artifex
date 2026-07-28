@@ -5,7 +5,9 @@ const { getDb } = require('../db');
 const { requireAuth, optionalAuth } = require('../lib/authMiddleware');
 const federationSync = require('../lib/federation-sync');
 const federationFeed = require('../lib/federation-feed');
+const directoryClient = require('../lib/directory-client');
 const { remoteMediaUrls } = require('../lib/federation-urls');
+const { getNsfwTags } = require('../lib/tagger');
 
 const router = express.Router();
 const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
@@ -71,6 +73,7 @@ function getManifest() {
     description: getSetting('instance_description') || '',
     url: getSetting('instance_url') || '',
     federation_enabled: isFederationEnabled(),
+    discovery_enabled: getSetting('discovery_enabled') === 'true',
     api_version: API_VERSION,
     stats: {
       public_images: imageCount.c,
@@ -92,8 +95,8 @@ const PUBLIC_IMAGE_COLUMNS = `
 
 function serializePublicImage(db, img) {
   const tags = db.prepare(`
-    SELECT t.name, t.category FROM image_tags it JOIN tags t ON it.tag_id = t.id
-    WHERE it.image_id = ? ORDER BY t.category, t.name
+    SELECT t.name, t.category, it.source, it.confidence FROM image_tags it JOIN tags t ON it.tag_id = t.id
+    WHERE it.image_id = ? ORDER BY t.category, COALESCE(it.confidence, 1) DESC, t.name
   `).all(img.id);
 
   return {
@@ -270,6 +273,9 @@ router.get('/settings', requireAuth, requireAdmin, (req, res) => {
       instance_description: getSetting('instance_description'),
       instance_url: getSetting('instance_url'),
       federation_enabled: getSetting('federation_enabled') === 'true',
+      discovery_enabled: getSetting('discovery_enabled') === 'true',
+      directory_url: getSetting('directory_url') || '',
+      directory_status: directoryClient.getStatus(),
     });
   } catch (error) {
     res.status(500).json({ error: 'An internal error occurred' });
@@ -279,7 +285,7 @@ router.get('/settings', requireAuth, requireAdmin, (req, res) => {
 // PUT /api/federation/settings — update federation settings (admin only)
 router.put('/settings', requireAuth, requireAdmin, (req, res) => {
   try {
-    const { instance_name, instance_description, instance_url, federation_enabled } = req.body;
+    const { instance_name, instance_description, instance_url, federation_enabled, discovery_enabled, directory_url } = req.body;
 
     if (instance_name !== undefined) setSetting('instance_name', instance_name);
     if (instance_description !== undefined) setSetting('instance_description', instance_description);
@@ -290,6 +296,15 @@ router.put('/settings', requireAuth, requireAdmin, (req, res) => {
       // process restart
       if (federation_enabled) federationSync.start();
       else federationSync.stop();
+    }
+    if (directory_url !== undefined) setSetting('directory_url', String(directory_url).trim().replace(/\/+$/, ''));
+    if (discovery_enabled !== undefined) {
+      setSetting('discovery_enabled', discovery_enabled ? 'true' : 'false');
+      // Register/unregister immediately so the toggle feels live
+      if (discovery_enabled) { directoryClient.start(); directoryClient.registerOnce().catch(() => {}); }
+      else { directoryClient.unregister().catch(() => {}); }
+    } else if (directory_url !== undefined && getSetting('discovery_enabled') === 'true') {
+      directoryClient.registerOnce().catch(() => {});
     }
 
     const audit = require('../lib/audit');
@@ -349,6 +364,41 @@ router.get('/peers/health', requireAuth, async (req, res) => {
     res.json({ peers: results });
   } catch (error) {
     res.status(500).json({ error: 'An internal error occurred' });
+  }
+});
+
+// ─── Discovery — browse the configured public directory ───
+// Server-side proxy: keeps the directory URL in one place, caches briefly,
+// hides self, and marks entries already in the caller's lists.
+let discoveryCache = { at: 0, url: null, data: null };
+
+router.get('/discovery', requireAuth, async (req, res) => {
+  try {
+    const dirUrl = (getSetting('directory_url') || '').replace(/\/+$/, '');
+    if (!dirUrl) return res.json({ instances: [], directory_url: null });
+
+    if (!discoveryCache.data || discoveryCache.url !== dirUrl || Date.now() - discoveryCache.at > 60000) {
+      const controller = new AbortController();
+      const t = setTimeout(() => controller.abort(), 10000);
+      try {
+        const r = await fetch(`${dirUrl}/api/directory/instances`, { signal: controller.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        discoveryCache = { at: Date.now(), url: dirUrl, data: await r.json() };
+      } finally { clearTimeout(t); }
+    }
+
+    const db = getDb();
+    const selfId = getSetting('instance_id');
+    const myPeers = new Set(db.prepare('SELECT url FROM peers WHERE owner_user_id = ?').all(req.user.id).map(p => p.url));
+    const globalPeers = new Set(db.prepare('SELECT url FROM peers WHERE owner_user_id IS NULL').all().map(p => p.url));
+
+    const instances = (discoveryCache.data.instances || [])
+      .filter(i => i.instance_id !== selfId)
+      .map(i => ({ ...i, added_mine: myPeers.has(i.url), added_global: globalPeers.has(i.url) }));
+
+    res.json({ instances, directory_url: dirUrl });
+  } catch (e) {
+    res.status(502).json({ error: `Directory unreachable: ${e.message}` });
   }
 });
 
@@ -565,20 +615,25 @@ router.get('/feed', optionalAuth, async (req, res) => {
 
     // Parse JSON fields, add direct-to-peer media URLs; local cached
     // thumbnail_path stays as the offline fallback
-    const enriched = images.map(img => ({
-      ...img,
-      is_remote: true,
-      remote_row_id: img.id, // ri.* puts the remote_images row id in `id`
-      tags: img.tags_json ? JSON.parse(img.tags_json) : [],
-      metadata: {
-        prompt: img.prompt, model: img.model, sampler: img.sampler,
-        steps: img.steps, cfg_scale: img.cfg_scale, seed: img.seed,
-      },
-      ...remoteMediaUrls(img.peer_url, img),
-      tags_json: undefined,
-      filepath: undefined,
-      preview_path: undefined,
-    }));
+    const nsfwSet = new Set(getNsfwTags());
+    const enriched = images.map(img => {
+      const tags = img.tags_json ? JSON.parse(img.tags_json) : [];
+      return {
+        ...img,
+        is_remote: true,
+        remote_row_id: img.id, // ri.* puts the remote_images row id in `id`
+        tags,
+        is_nsfw: tags.some(t => nsfwSet.has(t.name)),
+        metadata: {
+          prompt: img.prompt, model: img.model, sampler: img.sampler,
+          steps: img.steps, cfg_scale: img.cfg_scale, seed: img.seed,
+        },
+        ...remoteMediaUrls(img.peer_url, img),
+        tags_json: undefined,
+        filepath: undefined,
+        preview_path: undefined,
+      };
+    });
 
     const live = peerId ? { items: [], total: 0 } : await federationFeed.fetchAllLiveWindows(windowSize, null, uid);
 

@@ -1,18 +1,15 @@
 import { useState, useEffect, useCallback } from 'react'
-import { ArrowLeft, Users, HardDrives, Image, FilmStrip, Heart, Shield, Trash, ArrowCounterClockwise, Prohibit, Key, CircleNotch, Check, ArrowClockwise, ShareNetwork, Globe, Plus, X } from '@phosphor-icons/react'
+import { ArrowLeft, Users, HardDrives, Image, FilmStrip, Heart, Shield, Trash, ArrowCounterClockwise, Prohibit, Key, CircleNotch, Check, ArrowClockwise, ShareNetwork, Globe, Plus, X, EyeSlash, SquaresFour, List, CaretDown, CaretRight } from '@phosphor-icons/react'
 import { API_URL } from '../config'
 import { useAuth } from '../context/AuthContext'
 import usePeerHealth from '../hooks/usePeerHealth'
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'audit', label: 'Audit Log' },
-  { id: 'jobs', label: 'Job Queue' },
+  { id: 'content', label: 'Content' },
   { id: 'users', label: 'Users' },
-  { id: 'moderation', label: 'Moderation' },
-  { id: 'storage', label: 'Storage' },
+  { id: 'ml', label: 'ML' },
   { id: 'federation', label: 'Federation' },
-  { id: 'system', label: 'System' },
 ]
 
 const formatSize = (bytes) => {
@@ -34,14 +31,12 @@ const ActionBtn = ({ onClick, loading, color = 'accent', children }) => (
 )
 
 // ─── Overview Tab ───
-function OverviewTab({ stats, authHeaders }) {
-  const [jobStats, setJobStats] = useState(null)
-  const [auditRecent, setAuditRecent] = useState([])
+function OverviewTab({ stats }) {
+  const [health, setHealth] = useState(null)
 
   useEffect(() => {
-    fetch(`${API_URL}/tags/jobs/stats`, { headers: authHeaders }).then(r => r.json()).then(setJobStats).catch(() => {})
-    fetch(`${API_URL}/admin/audit?limit=10`, { headers: authHeaders }).then(r => r.json()).then(d => setAuditRecent(d.logs || [])).catch(() => {})
-  }, [authHeaders])
+    fetch(`${API_URL}/health`).then(r => r.json()).then(setHealth).catch(() => {})
+  }, [])
 
   if (!stats) return null
 
@@ -64,43 +59,23 @@ function OverviewTab({ stats, authHeaders }) {
         ))}
       </div>
 
-      {/* Job queue summary */}
-      {jobStats && (
+      {/* System health (was the System tab's readout) */}
+      {health && (
         <div>
-          <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">ML Processing Queue</h3>
-          <div className="grid grid-cols-4 gap-3">
-            {[
-              { label: 'Pending', value: jobStats.pending, color: 'text-yellow' },
-              { label: 'Processing', value: jobStats.processing, color: 'text-accent' },
-              { label: 'Done', value: jobStats.done, color: 'text-green' },
-              { label: 'Failed', value: jobStats.failed, color: 'text-red' },
-            ].map(s => (
-              <div key={s.label} className="bg-bg-card rounded-xl p-3 text-center">
-                <p className={`text-lg font-bold ${s.color}`}>{s.value}</p>
-                <p className="text-[11px] text-text-muted">{s.label}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Recent activity */}
-      {auditRecent.length > 0 && (
-        <div>
-          <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Recent Activity</h3>
-          <div className="bg-bg-card rounded-2xl overflow-hidden divide-y divide-white/[0.04]">
-            {auditRecent.map(log => (
-              <div key={log.id} className="px-4 py-2.5 flex items-center gap-3">
-                <span className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded-md shrink-0
-                  ${log.action.includes('delete') || log.action.includes('purge') ? 'bg-red/10 text-red' :
-                    log.action.includes('upload') || log.action.includes('register') ? 'bg-green/10 text-green' :
-                    log.action.includes('login') ? 'bg-accent/10 text-accent' :
-                    'bg-white/[0.06] text-text-muted'}`}
-                >{log.action}</span>
-                <span className="text-[12px] text-text-secondary truncate flex-1">{log.username || 'system'}</span>
-                <span className="text-[11px] text-text-muted shrink-0">{new Date(log.created_at).toLocaleTimeString()}</span>
-              </div>
-            ))}
+          <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">System Health</h3>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="bg-bg-card rounded-xl p-4 text-center">
+              <p className="text-xl font-bold text-green">{Math.floor(health.uptime / 60)}m</p>
+              <p className="text-[11px] text-text-muted mt-1">Uptime</p>
+            </div>
+            <div className="bg-bg-card rounded-xl p-4 text-center">
+              <p className="text-xl font-bold text-text">{health.images}</p>
+              <p className="text-[11px] text-text-muted mt-1">Total Images</p>
+            </div>
+            <div className="bg-bg-card rounded-xl p-4 text-center">
+              <p className="text-xl font-bold text-accent">OK</p>
+              <p className="text-[11px] text-text-muted mt-1">Status</p>
+            </div>
           </div>
         </div>
       )}
@@ -343,49 +318,251 @@ function UsersTab({ authHeaders }) {
   )
 }
 
+// Tag manager — usage counts, rename/merge, cleanup, and per-tag NSFW rule
+// toggles (any tag flipped on counts as NSFW for moderation + safe mode)
+function TagManagerSection({ authHeaders }) {
+  const [tags, setTags] = useState([])
+  const [query, setQuery] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [nsfwRules, setNsfwRules] = useState([])
+
+  const load = useCallback(async (q = '') => {
+    try {
+      const res = await fetch(`${API_URL}/tags/manage${q ? `?q=${encodeURIComponent(q)}` : ''}`, { headers: authHeaders })
+      if (res.ok) { const d = await res.json(); setTags(d.tags || []) }
+    } catch { /* ignore */ }
+  }, [authHeaders])
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on mount
+  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    fetch(`${API_URL}/tags/settings`, { headers: authHeaders }).then(r => r.json())
+      .then(d => setNsfwRules(d.nsfw_tags || [])).catch(() => {})
+  }, [authHeaders])
+
+  const saveRules = async (list) => {
+    setNsfwRules(list)
+    await fetch(`${API_URL}/tags/settings`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify({ nsfw_tags: list })
+    })
+  }
+
+  const toggleNsfwRule = (name) => {
+    const has = nsfwRules.includes(name)
+    saveRules(has ? nsfwRules.filter(n => n !== name) : [...nsfwRules, name])
+  }
+
+  // Rule names with no matching tag row (e.g. defaults before any image
+  // carries them) — shown as removable chips so they stay visible/editable
+  const tagNames = new Set(tags.map(t => t.name))
+  const detachedRules = nsfwRules.filter(n => !tagNames.has(n))
+
+  const rename = async (tag) => {
+    const name = window.prompt(`Rename "${tag.name}" (${tag.category}) to:`, tag.name)
+    if (!name || name.trim().toLowerCase() === tag.name) return
+    await fetch(`${API_URL}/tags/${tag.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ name }) })
+    load(query)
+  }
+
+  const merge = async (tag) => {
+    const targetName = window.prompt(`Merge "${tag.name}" into which tag? (name in category "${tag.category}")`)
+    if (!targetName) return
+    const target = tags.find(t => t.name === targetName.trim().toLowerCase() && t.category === tag.category && t.id !== tag.id)
+    if (!target) { window.alert(`No tag "${targetName}" found in category "${tag.category}" — check the list.`) ; return }
+    await fetch(`${API_URL}/tags/merge`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders }, body: JSON.stringify({ from_ids: [tag.id], into_id: target.id }) })
+    load(query)
+  }
+
+  const remove = async (tag) => {
+    if (!window.confirm(`Delete tag "${tag.name}" from all ${tag.usage_count} images?`)) return
+    await fetch(`${API_URL}/tags/${tag.id}`, { method: 'DELETE', headers: authHeaders })
+    load(query)
+  }
+
+  const sweepOrphans = async () => {
+    setBusy(true)
+    try {
+      const res = await fetch(`${API_URL}/tags/orphans`, { method: 'DELETE', headers: authHeaders })
+      const d = await res.json()
+      window.alert(`Removed ${d.removed} unused tags`)
+    } catch { /* ignore */ }
+    setBusy(false)
+    load(query)
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <input
+          type="text" value={query} placeholder="Filter tags..."
+          onChange={e => { setQuery(e.target.value); load(e.target.value) }}
+          className="flex-1 max-w-[240px] h-8 bg-bg-elevated rounded-lg px-3 text-[13px] text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/30"
+        />
+        <div className="flex-1" />
+        {/* NSFW rule names that exist only as rules (no tag row yet) */}
+        {detachedRules.map(name => (
+          <span key={name} className="h-7 px-2 rounded-md bg-red/10 text-red text-[11px] font-medium flex items-center gap-1 shrink-0" title="NSFW rule (no tag with this name yet)">
+            <EyeSlash className="w-3 h-3" /> {name}
+            <button onClick={() => toggleNsfwRule(name)} className="hover:text-white transition-colors"><X className="w-3 h-3" /></button>
+          </span>
+        ))}
+        <button onClick={sweepOrphans} disabled={busy} className="h-8 px-3 rounded-lg text-[12px] font-medium text-text-secondary hover:text-text bg-white/[0.06] disabled:opacity-40 transition-all shrink-0">
+          Sweep unused tags
+        </button>
+      </div>
+      <p className="text-[11px] text-text-muted/70 mb-2">The <EyeSlash className="w-3 h-3 inline" /> toggle marks a tag as an NSFW rule — flagged items appear in Moderation and blur for viewers with safe mode on.</p>
+      <div className="bg-bg-card rounded-2xl overflow-hidden divide-y divide-white/[0.04] max-h-[420px] overflow-y-auto">
+        {tags.length === 0 ? (
+          <p className="text-[13px] text-text-muted text-center py-6">No tags{query ? ' match' : ''}</p>
+        ) : tags.map(tag => (
+          <div key={tag.id} className="px-4 py-2.5 flex items-center gap-3">
+            <button
+              onClick={() => toggleNsfwRule(tag.name)}
+              className={`p-1 rounded-md transition-all shrink-0 ${nsfwRules.includes(tag.name) ? 'text-red bg-red/10' : 'text-text-muted/40 hover:text-text-secondary'}`}
+              title={nsfwRules.includes(tag.name) ? 'NSFW rule — click to remove' : 'Mark as NSFW rule'}
+            >
+              <EyeSlash className="w-3.5 h-3.5" />
+            </button>
+            <span className="text-[13px] text-text truncate">{tag.name}</span>
+            <span className="text-[10px] uppercase text-text-muted bg-white/[0.05] rounded px-1.5 py-0.5 shrink-0">{tag.category}</span>
+            <span className="text-[11px] text-text-muted tabular-nums shrink-0">{tag.usage_count}</span>
+            <div className="flex-1" />
+            <button onClick={() => rename(tag)} className="text-[11px] font-medium text-text-secondary hover:text-accent transition-colors shrink-0">Rename</button>
+            <button onClick={() => merge(tag)} className="text-[11px] font-medium text-text-secondary hover:text-accent transition-colors shrink-0">Merge</button>
+            <button onClick={() => remove(tag)} className="text-[11px] font-medium text-text-secondary hover:text-red transition-colors shrink-0">Delete</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── Content Moderation Tab ───
 function ModerationTab({ authHeaders }) {
   const [flagged, setFlagged] = useState([])
+  const [preview, setPreview] = useState(null)
   const [loading, setLoading] = useState(true)
+  // Collapsed by default — flagged content stays hidden until deliberately opened
+  const [expanded, setExpanded] = useState(false)
+  const [viewMode, setViewMode] = useState('grid')
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API_URL}/images?tag=explicit&limit=50`, { headers: authHeaders })
+        // All local content matching the NSFW rules (detector rating OR
+        // admin-listed tags), regardless of owner/visibility
+        const res = await fetch(`${API_URL}/images/moderation?limit=100`, { headers: authHeaders })
         if (res.ok) { const d = await res.json(); setFlagged(d.images || []) }
       } catch {}
       setLoading(false)
     })()
   }, [authHeaders])
 
+  const remove = async (img) => {
+    if (!window.confirm(`Delete "${img.title || img.original_name}"? This cannot be undone.`)) return
+    await fetch(`${API_URL}/images/${img.id}`, { method: 'DELETE', headers: authHeaders })
+    setFlagged(prev => prev.filter(i => i.id !== img.id))
+  }
+
   if (loading) return <div className="text-center py-8 text-text-muted">Loading...</div>
 
   return (
     <div className="space-y-4">
-      <p className="text-[12px] text-text-muted">{flagged.length} image{flagged.length !== 1 ? 's' : ''} flagged as explicit by NSFW detector</p>
-      {flagged.length === 0 ? (
-        <div className="bg-bg-card rounded-2xl p-8 text-center text-text-muted">
-          <Check className="w-8 h-8 mx-auto mb-2 text-green" />
-          <p className="text-[14px] font-medium">No flagged content</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-          {flagged.map(img => (
-            <div key={img.id} className="relative group rounded-xl overflow-hidden bg-bg-card aspect-square">
-              <img src={`${API_URL.replace('/api', '')}/uploads/${img.thumbnail_path || img.filepath}`} alt="" className="w-full h-full object-cover" />
-              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                <button onClick={async () => {
-                  await fetch(`${API_URL}/images/${img.id}`, { method: 'DELETE', headers: authHeaders })
-                  setFlagged(prev => prev.filter(i => i.id !== img.id))
-                }} className="p-2 bg-red/80 rounded-lg text-white hover:bg-red transition-colors" title="Delete">
-                  <Trash className="w-4 h-4" />
-                </button>
+      <div className="bg-bg-card rounded-2xl">
+        <button onClick={() => setExpanded(e => !e)} className="w-full px-5 py-4 flex items-center gap-3 text-left">
+          {expanded ? <CaretDown className="w-4 h-4 text-text-muted shrink-0" /> : <CaretRight className="w-4 h-4 text-text-muted shrink-0" />}
+          <div className="flex-1">
+            <p className="text-[14px] font-medium text-text">Flagged content</p>
+            <p className="text-[12px] text-text-secondary mt-0.5">{flagged.length} item{flagged.length !== 1 ? 's' : ''} matching the NSFW rules (detector rating or listed tags) — hidden until expanded</p>
+          </div>
+          {flagged.length > 0 && <Badge color="red">{flagged.length}</Badge>}
+        </button>
+        {expanded && (
+          <div className="px-5 pb-5">
+            {flagged.length === 0 ? (
+              <div className="py-6 text-center text-text-muted">
+                <Check className="w-8 h-8 mx-auto mb-2 text-green" />
+                <p className="text-[14px] font-medium">No flagged content</p>
               </div>
-              <div className="absolute top-1 left-1">
-                <Badge color="red">NSFW</Badge>
-              </div>
-            </div>
-          ))}
+            ) : (
+              <>
+                <div className="flex items-center justify-end gap-1 mb-3">
+                  <button onClick={() => setViewMode('grid')} title="Grid view"
+                    className={`p-1.5 rounded-lg transition-all ${viewMode === 'grid' ? 'bg-white/[0.08] text-text' : 'text-text-muted hover:text-text-secondary'}`}>
+                    <SquaresFour className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => setViewMode('list')} title="List view"
+                    className={`p-1.5 rounded-lg transition-all ${viewMode === 'list' ? 'bg-white/[0.08] text-text' : 'text-text-muted hover:text-text-secondary'}`}>
+                    <List className="w-4 h-4" />
+                  </button>
+                </div>
+                {viewMode === 'grid' ? (
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                    {flagged.map(img => (
+                      <div key={img.id} onClick={() => setPreview(img)} className="relative group rounded-xl overflow-hidden bg-bg-elevated aspect-square cursor-pointer">
+                        <img src={`${API_URL.replace('/api', '')}/uploads/${img.thumbnail_path || img.filepath}`} alt="" className="w-full h-full object-cover" />
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <span className="text-[11px] font-medium text-white">Click to inspect</span>
+                        </div>
+                        <div className="absolute top-1 left-1">
+                          <Badge color="red">NSFW</Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-xl overflow-hidden divide-y divide-white/[0.04] bg-bg-elevated">
+                    {flagged.map(img => (
+                      <div key={img.id} className="px-3 py-2 flex items-center gap-3">
+                        <img
+                          src={`${API_URL.replace('/api', '')}/uploads/${img.thumbnail_path || img.filepath}`}
+                          alt="" onClick={() => setPreview(img)}
+                          className="w-10 h-10 rounded-lg object-cover shrink-0 cursor-pointer"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[13px] text-text truncate">{img.title || img.original_name}</p>
+                          <p className="text-[11px] text-text-muted truncate">
+                            {img.uploaded_by} · {img.visibility} · {img.media_type}{img.created_at ? ` · ${new Date(img.created_at).toLocaleDateString()}` : ''}
+                          </p>
+                        </div>
+                        <button onClick={() => setPreview(img)} className="text-[11px] font-medium text-text-secondary hover:text-accent transition-colors shrink-0">Inspect</button>
+                        <button onClick={() => remove(img)} className="text-[11px] font-medium text-text-secondary hover:text-red transition-colors shrink-0 flex items-center gap-1">
+                          <Trash className="w-3.5 h-3.5" /> Delete
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Full-size inspection before any delete decision */}
+      {preview && (
+        <div className="fixed inset-0 z-50 bg-black/90 flex flex-col" onClick={() => setPreview(null)}>
+          <div className="flex-1 min-h-0 flex items-center justify-center p-6" onClick={e => e.stopPropagation()}>
+            {preview.media_type === 'video' ? (
+              <video src={`${API_URL.replace('/api', '')}/uploads/${preview.filepath}`} controls autoPlay muted className="max-w-full max-h-full rounded-xl" />
+            ) : (
+              <img src={`${API_URL.replace('/api', '')}/uploads/${preview.filepath}`} alt="" className="max-w-full max-h-full object-contain rounded-xl" />
+            )}
+          </div>
+          <div className="shrink-0 pb-8 flex items-center justify-center gap-3" onClick={e => e.stopPropagation()}>
+            <span className="text-[13px] text-white/60 mr-2 truncate max-w-[240px]">{preview.title || preview.original_name}</span>
+            <button onClick={async () => {
+              await fetch(`${API_URL}/images/${preview.id}`, { method: 'DELETE', headers: authHeaders })
+              setFlagged(prev => prev.filter(i => i.id !== preview.id))
+              setPreview(null)
+            }} className="px-4 py-2 bg-red rounded-lg text-white text-[13px] font-semibold hover:bg-red/80 transition-colors flex items-center gap-2">
+              <Trash className="w-4 h-4" /> Delete
+            </button>
+            <button onClick={() => setPreview(null)} className="px-4 py-2 bg-white/[0.1] rounded-lg text-white text-[13px] font-medium hover:bg-white/[0.2] transition-colors">
+              Keep
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -605,6 +782,40 @@ function FederationTab({ authHeaders }) {
         </div>
       </div>
 
+      {/* Discovery */}
+      <div className="bg-bg-card rounded-2xl p-5">
+        <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-4">Discovery</h3>
+        {settings.discovery_enabled && settings.directory_status?.status === 'unreachable' && (
+          <div className="mb-3 px-3 py-2 rounded-lg bg-red/10 text-[12px] text-red">
+            Directory unreachable — {settings.directory_status.last_error || 'no response'}. Listings age out after 24h without a heartbeat.
+          </div>
+        )}
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <span className="text-[13px] text-text">List in public directory</span>
+            <p className="text-[11px] text-text-muted">Other instances can find and add this gallery from the directory's Discovery section</p>
+          </div>
+          <button
+            onClick={() => updateSetting('discovery_enabled', !settings.discovery_enabled)}
+            className={`w-12 h-7 rounded-full transition-all duration-200 ${settings.discovery_enabled ? 'bg-accent' : 'bg-white/[0.1]'}`}
+          >
+            <div className={`w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${settings.discovery_enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+          </button>
+        </div>
+        <div>
+          <label className="block text-[12px] text-text-muted mb-1">Directory URL</label>
+          <input
+            type="text" value={settings.directory_url || ''} placeholder="https://directory.example.com"
+            onChange={e => setSettings(prev => ({ ...prev, directory_url: e.target.value }))}
+            onBlur={e => updateSetting('directory_url', e.target.value)}
+            className="w-full h-8 bg-bg-elevated rounded-lg px-3 text-[13px] text-text placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent/30"
+          />
+        </div>
+        {settings.discovery_enabled && settings.directory_status?.status === 'ok' && settings.directory_status.last_success && (
+          <p className="text-[11px] text-green mt-2">Listed — last confirmed {new Date(settings.directory_status.last_success).toLocaleString()}</p>
+        )}
+      </div>
+
       {/* Peers */}
       <div className="bg-bg-card rounded-2xl p-5">
         <div className="flex items-center justify-between mb-4">
@@ -687,13 +898,56 @@ function FederationTab({ authHeaders }) {
   )
 }
 
-function SystemTab({ authHeaders }) {
-  const [health, setHealth] = useState(null)
-  const [loading, setLoading] = useState({})
+// Tagging knobs (WD threshold + max tags) — composed under the ML tab
+function TaggingSettingsSection({ authHeaders }) {
+  const [settings, setSettings] = useState(null)
+  const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    fetch(`${API_URL}/health`).then(r => r.json()).then(setHealth).catch(() => {})
-  }, [])
+    fetch(`${API_URL}/tags/settings`, { headers: authHeaders }).then(r => r.json()).then(setSettings).catch(() => {})
+  }, [authHeaders])
+
+  const save = async (patch) => {
+    const res = await fetch(`${API_URL}/tags/settings`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify(patch)
+    })
+    if (res.ok) { setSettings(await res.json()); setSaved(true); setTimeout(() => setSaved(false), 1500) }
+  }
+
+  if (!settings) return null
+  return (
+    <div>
+      <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Tagging Settings</h3>
+      <div className="bg-bg-card rounded-2xl p-5 flex flex-wrap items-end gap-5">
+        <div>
+          <label className="block text-[12px] text-text-muted mb-1">Confidence threshold</label>
+          <input
+            type="number" min="0.05" max="0.95" step="0.05" defaultValue={settings.threshold}
+            onBlur={e => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) save({ threshold: v }) }}
+            className="w-24 h-8 bg-bg-elevated rounded-lg px-3 text-[13px] text-text focus:outline-none focus:ring-1 focus:ring-accent/30"
+          />
+          <p className="text-[10px] text-text-muted/60 mt-1">Lower = more tags, noisier. Default 0.35</p>
+        </div>
+        <div>
+          <label className="block text-[12px] text-text-muted mb-1">Max tags per image</label>
+          <input
+            type="number" min="1" max="100" step="1" defaultValue={settings.maxTags}
+            onBlur={e => { const v = parseInt(e.target.value); if (Number.isFinite(v)) save({ max_tags: v }) }}
+            className="w-24 h-8 bg-bg-elevated rounded-lg px-3 text-[13px] text-text focus:outline-none focus:ring-1 focus:ring-accent/30"
+          />
+          <p className="text-[10px] text-text-muted/60 mt-1">Default 30</p>
+        </div>
+        {saved && <span className="text-[12px] text-green pb-2">Saved — applies to new tagging runs</span>}
+      </div>
+    </div>
+  )
+}
+
+// Batch ML operations — composed under the ML tab next to the job queue
+function BatchOpsSection({ authHeaders }) {
+  const [loading, setLoading] = useState({})
+  const [retagResult, setRetagResult] = useState(null)
 
   const runBatch = async (endpoint, key) => {
     setLoading(prev => ({ ...prev, [key]: true }))
@@ -703,25 +957,19 @@ function SystemTab({ authHeaders }) {
     setLoading(prev => ({ ...prev, [key]: false }))
   }
 
+  const retagEverything = async () => {
+    if (!window.confirm('Re-tag ALL images with the current tagging settings? Existing vision tags are replaced. Runs 100 items per pass — repeat for large libraries.')) return
+    setLoading(prev => ({ ...prev, retag_all: true }))
+    try {
+      const res = await fetch(`${API_URL}/tags/vision/batch?all=true&limit=100`, { method: 'POST', headers: authHeaders })
+      const data = await res.json()
+      setRetagResult(res.ok ? `Re-tagged ${data.processed} items — run again for the next batch` : (data.error || 'Failed'))
+    } catch { setRetagResult('Failed') }
+    setLoading(prev => ({ ...prev, retag_all: false }))
+  }
+
   return (
     <div className="space-y-6">
-      {health && (
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-bg-card rounded-xl p-4 text-center">
-            <p className="text-xl font-bold text-green">{Math.floor(health.uptime / 60)}m</p>
-            <p className="text-[11px] text-text-muted mt-1">Uptime</p>
-          </div>
-          <div className="bg-bg-card rounded-xl p-4 text-center">
-            <p className="text-xl font-bold text-text">{health.images}</p>
-            <p className="text-[11px] text-text-muted mt-1">Total Images</p>
-          </div>
-          <div className="bg-bg-card rounded-xl p-4 text-center">
-            <p className="text-xl font-bold text-accent">OK</p>
-            <p className="text-[11px] text-text-muted mt-1">Status</p>
-          </div>
-        </div>
-      )}
-
       <div>
         <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Batch Operations</h3>
         <div className="bg-bg-card rounded-2xl overflow-hidden divide-y divide-white/[0.04]">
@@ -739,6 +987,14 @@ function SystemTab({ authHeaders }) {
               <ActionBtn onClick={() => runBatch(op.endpoint, op.key)} loading={loading[op.key]}>Run</ActionBtn>
             </div>
           ))}
+          <div className="px-5 py-4 flex items-center justify-between">
+            <div>
+              <p className="text-[14px] font-medium text-text">Re-tag Everything</p>
+              <p className="text-[12px] text-text-secondary mt-0.5">Replace ALL vision tags using the current tagging settings (100 items per pass)</p>
+              {retagResult && <p className="text-[12px] text-accent mt-1">{retagResult}</p>}
+            </div>
+            <ActionBtn onClick={retagEverything} loading={loading.retag_all}>Run</ActionBtn>
+          </div>
         </div>
       </div>
     </div>
@@ -784,14 +1040,40 @@ export default function AdminSettings({ onBack }) {
 
       {/* Tab content */}
       <div className="max-w-[1100px] mx-auto px-5 sm:px-8 py-8">
-        {tab === 'overview' && <OverviewTab stats={stats} authHeaders={authHeaders} />}
-        {tab === 'audit' && <AuditTab authHeaders={authHeaders} />}
-        {tab === 'jobs' && <JobsTab authHeaders={authHeaders} />}
+        {tab === 'overview' && (
+          <div className="space-y-8">
+            <OverviewTab stats={stats} />
+            <div>
+              <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Audit Log</h3>
+              <AuditTab authHeaders={authHeaders} />
+            </div>
+          </div>
+        )}
+        {tab === 'content' && (
+          <div className="space-y-8">
+            <div>
+              <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Moderation</h3>
+              <ModerationTab authHeaders={authHeaders} />
+            </div>
+            <div>
+              <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Storage Maintenance</h3>
+              <StorageTab stats={stats} authHeaders={authHeaders} />
+            </div>
+            <div>
+              <h3 className="text-[12px] font-semibold text-text-muted uppercase tracking-wide mb-3">Tags</h3>
+              <TagManagerSection authHeaders={authHeaders} />
+            </div>
+          </div>
+        )}
         {tab === 'users' && <UsersTab authHeaders={authHeaders} currentUser={user} />}
-        {tab === 'moderation' && <ModerationTab authHeaders={authHeaders} />}
-        {tab === 'storage' && <StorageTab stats={stats} authHeaders={authHeaders} />}
+        {tab === 'ml' && (
+          <div className="space-y-8">
+            <JobsTab authHeaders={authHeaders} />
+            <TaggingSettingsSection authHeaders={authHeaders} />
+            <BatchOpsSection authHeaders={authHeaders} />
+          </div>
+        )}
         {tab === 'federation' && <FederationTab authHeaders={authHeaders} />}
-        {tab === 'system' && <SystemTab authHeaders={authHeaders} />}
       </div>
     </div>
   )

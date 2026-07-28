@@ -367,6 +367,14 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     federationSync.start();
   }
 
+  // Directory heartbeat — keeps this instance listed while discovery is on.
+  // Deliberately NOT unregistered on shutdown: restarts shouldn't delist us;
+  // the directory ages out instances that stay silent.
+  const discoveryOn = db.prepare("SELECT value FROM instance_settings WHERE key = 'discovery_enabled'").get();
+  if (discoveryOn?.value === 'true') {
+    require('./lib/directory-client').start();
+  }
+
   // One-time embedded-creation-date backfill (async, guarded internally)
   setTimeout(() => {
     require('./lib/creation-backfill').run().catch(err => console.error('[Backfill] failed:', err.message));

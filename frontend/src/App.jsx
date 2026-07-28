@@ -60,6 +60,8 @@ function App() {
   const [favFilters, setFavFilters] = useState(() => {
     try { return JSON.parse(localStorage.getItem('galleryFavFilters')) || {} } catch { return {} }
   })
+  // Safe mode: blur NSFW-flagged items in grids (per-browser, default on)
+  const [blurNsfw, setBlurNsfw] = useState(() => localStorage.getItem('galleryBlurNsfw') !== 'false')
   const searchDebounce = useRef(null)
 
   // Apply theme to <html> element
@@ -77,6 +79,10 @@ function App() {
     if (Object.keys(favFilters).length > 0) localStorage.setItem('galleryFavFilters', JSON.stringify(favFilters))
     else localStorage.removeItem('galleryFavFilters')
   }, [favFilters])
+
+  useEffect(() => {
+    localStorage.setItem('galleryBlurNsfw', String(blurNsfw))
+  }, [blurNsfw])
 
   // Debounced search → filters
   const handleSearchChange = useCallback((value) => {
@@ -301,6 +307,8 @@ function App() {
         onOpenProfile={() => navigateToProfile(user.username)}
         onOpenAdmin={() => setCurrentPage('admin')}
         onOpenMyNetwork={() => setCurrentPage('my-network')}
+        blurNsfw={blurNsfw}
+        onToggleBlurNsfw={() => setBlurNsfw(prev => !prev)}
         onOpenTheme={() => setCurrentPage('theme')}
         onOpenShortcuts={() => setShowShortcuts(true)}
         onOpenStats={() => setCurrentPage('stats')}
@@ -310,7 +318,7 @@ function App() {
       {galleryTab === 'network' ? (
         <main className="max-w-[1400px] mx-auto px-5 sm:px-8 pt-4 pb-20 sm:pb-8">
           <ErrorBoundary message="Network feed failed to load.">
-            <FederatedGrid gridSize={gridSize} authHeaders={authHeaders} />
+            <FederatedGrid gridSize={gridSize} authHeaders={authHeaders} blurNsfw={blurNsfw} />
           </ErrorBoundary>
         </main>
       ) : galleryTab === 'library' ? (
@@ -382,6 +390,7 @@ function App() {
                   <GalleryGrid
                     key={`${refreshKey}-favorites`}
                     filters={favFilters}
+                    blurNsfw={blurNsfw}
                     galleryTab="favorites"
                     gridSize={gridSize}
                     onSelectImage={handleSelectImage}
@@ -512,6 +521,7 @@ function App() {
             <GalleryGrid
               key={`${refreshKey}-${galleryTab}`}
               filters={filters}
+              blurNsfw={blurNsfw}
               galleryTab={galleryTab}
               gridSize={gridSize}
               onSelectImage={handleSelectImage}

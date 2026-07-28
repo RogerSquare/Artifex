@@ -101,6 +101,7 @@ On image upload:
 - Remote images flagged with `is_remote: true` and carry `full_url`/`preview_url`/`thumb_url` in API responses
 - Per-peer `mode`: `synced` (default — metadata + thumbnails cached locally) or `live` (nothing stored; feeds fetch the peer's `/federation/public` at browse time with a 30s in-memory cache, items absent while peer offline). Toggle via `PUT /api/federation/peers/:id`; switching to live purges that peer's cache
 - No hub/relay: peers must be reachable from the viewer's browser (LAN or public URL, matching scheme)
+- Discovery (optional, registry-only): `directory/` is a standalone community-hostable directory container. Instances opt in via `discovery_enabled` + `directory_url` settings (env seeds: DISCOVERY_ENABLED/DIRECTORY_URL); `lib/directory-client.js` registers on boot + 6h heartbeat (3 failures → 'unreachable', shown as an admin warning); `GET /api/federation/discovery` proxies the list for the My Network Discovery section. No content flows through the directory
 
 ## Docker
 - Multi-stage Dockerfile: frontend build → production image (Node + Python + ffmpeg)

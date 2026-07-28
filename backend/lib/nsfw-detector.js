@@ -77,8 +77,8 @@ async function detectAndTag(imageId, imagePath) {
     tag = { id: info.lastInsertRowid };
   }
 
-  db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, source) VALUES (?, ?, ?)').run(
-    imageId, tag.id, 'nsfw-detector'
+  db.prepare('INSERT OR IGNORE INTO image_tags (image_id, tag_id, source, confidence) VALUES (?, ?, ?, ?)').run(
+    imageId, tag.id, 'nsfw-detector', Math.round((result.rating === 'sfw' ? result.sfw_score ?? (1 - result.nsfw_score) : result.nsfw_score) * 1000) / 1000
   );
 
   return { rating: result.rating, nsfw_score: result.nsfw_score };
